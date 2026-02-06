@@ -234,8 +234,8 @@
                 const registerMsg = {
                     type: "register",
                     role: "web",
-                    id: id.value,
-                    sessionId: `web-${id.value}`,
+                    id: `web-${id.value}`,
+                    sessionId: `${id.value}`,
                 };
                 ws.send(JSON.stringify(registerMsg));
 
