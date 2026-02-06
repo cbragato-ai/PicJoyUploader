@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 
 const routes = [
   {
-    path: "/:id/:encodedBridgeServerAddress",
+    path: "/:id",
     name: "home",
     component: () => import("../views/HomeView.vue"),
   },

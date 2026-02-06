@@ -39,6 +39,31 @@
                 <span v-if="remoteStatus"> — Máquina: {{ remoteStatus }}</span>
             </div>
         </v-footer>
+        <v-dialog v-model="userDialogShow" persistent>
+            <v-card class="rounded-xl" width="90vwd">
+                <v-card-title class="text-center">Bem-vindo ao PicJoy!</v-card-title>
+                <v-card-text>
+                    <p class="text-justify">Antes de começar preciso que se identifique para sua segurança.</p>
+                    <p class="text-justify">Os dados coletados servirão para envio da Nota Fiscal após o pagamento.
+                    </p>
+                    <v-form ref="form" v-model="formValid">
+                        <v-text-field label="E-mail" v-model="user.email" type="email" :rules="emailRules" required
+                            variant="outlined" autofocus></v-text-field>
+                        <v-text-field label="CPF" v-model="user.cpf" type="text" :rules="cpfRules" required
+                            v-mask="'###.###.###-##'" variant="outlined"></v-text-field>
+
+                    </v-form>
+                    <p class="text-justify">Antes de enviar os seus dados confira o código do quiosque.</p>
+                    <p class="text-justify">Ele aparece no canto inferior direito da tela.</p>
+                    <p class="text-justify">Compare com o identificador acima.Eles devem ser iguais.</p>
+
+                </v-card-text>
+                <v-card-actions>
+                    <v-spacer />
+                    <v-btn color="primary" @click="userDialogShow = false"
+                        :disabled="!formValid">Continuar</v-btn></v-card-actions>
+            </v-card>
+        </v-dialog>
         <v-dialog v-model="showDialog" persistent>
             <v-card class="bg-red-lighten-1 rounded-xl" width="90vwd">
                 <v-card-title class="text-center">Tranferência concluída!</v-card-title>
@@ -55,8 +80,7 @@
 <script setup lang="ts">
     import { ref, computed, onBeforeMount, onUnmounted } from "vue";
     import { useRoute } from "vue-router";
-    import CryptoJS from "crypto-js";
-
+    import axios from "axios";
 
     enum FileStatus { "idle", "sending", "done", "error" }
 
@@ -72,6 +96,9 @@
     };
 
     const route = useRoute();
+
+    const userDialogShow = ref(true);
+    const user = ref({ email: "", cpf: "" });
 
     const id = ref("");
     const identifier = ref("");
@@ -90,20 +117,68 @@
     const MAX_RETRIES_PER_CHUNK = 3;
     const RECONNECT_DELAY_MS = 3000;
 
-    function decryptUrl(encodedBridgeServerAddress: string, secret: string) {
-        const decoded = decodeURIComponent(encodedBridgeServerAddress);
-        const bytes = CryptoJS.AES.decrypt(decoded, secret);
-        return bytes.toString(CryptoJS.enc.Utf8);
+    const formValid = ref(false)
+
+    const emailRules = [
+        (v: string) => !!v || 'E-mail é obrigatório',
+        (v: string) =>
+            /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) || 'E-mail inválido'
+    ]
+
+    const cpfRules = [
+        (v: string) => !!v || 'CPF é obrigatório',
+        (v: string) => isValidCPF(v) || 'CPF inválido'
+    ]
+
+    // Remove tudo que não for número
+    function onlyNumbers(value: string) {
+        return value.replace(/\D/g, '')
     }
 
-    onBeforeMount(() => {
-        const uuIdTotem = (route.params.id as string)?.split("-") || [];
-        identifier.value = uuIdTotem.length ? uuIdTotem[uuIdTotem.length - 1] : "unknown";
-        id.value = (route.params.id as string) ?? "kiosk-session";
+    function isValidCPF(cpf: string): boolean {
+        cpf = onlyNumbers(cpf)
 
-        const encoded = route.params.encodedBridgeServerAddress as string | undefined;
-        const decodedBridgeServerAddress = encoded ? decryptUrl(encoded, "picjoy2025") : null;
-        bridgeServerAddress.value = decodedBridgeServerAddress ?? "wss://bridge.picjoy.com.br";
+        if (cpf.length !== 11) return false
+        if (/^(\d)\1{10}$/.test(cpf)) return false // todos iguais
+
+        let sum = 0
+        let rest
+
+        for (let i = 1; i <= 9; i++) {
+            sum += parseInt(cpf.substring(i - 1, i)) * (11 - i)
+        }
+
+        rest = (sum * 10) % 11
+        if (rest === 10 || rest === 11) rest = 0
+        if (rest !== parseInt(cpf.substring(9, 10))) return false
+
+        sum = 0
+        for (let i = 1; i <= 10; i++) {
+            sum += parseInt(cpf.substring(i - 1, i)) * (12 - i)
+        }
+
+        rest = (sum * 10) % 11
+        if (rest === 10 || rest === 11) rest = 0
+
+        return rest === parseInt(cpf.substring(10, 11))
+    }
+
+
+
+    onBeforeMount(async () => {
+        const code = route.params.id as string;
+        const session = (await axios.get(
+            `https://bridge.picjoy.com.br/session/${code}`,
+            {
+                headers: { "Content-Type": "application/json" }
+            })).data;
+
+        console.log("Session data:", session);
+
+        identifier.value = code ?? "unknown";
+        id.value = code ?? "kiosk-session";
+
+        bridgeServerAddress.value = session.bridgeServerAddress;
 
         connectWebSocket();
     });
@@ -257,6 +332,8 @@
 
         return btoa(binary); // mantém padding correto
     }
+
+    // Envia um arquivo inteiro fatiado em pedaços base64 via WebSocket
     async function sendSingleFile(
         file: File,
         toSession: string,
@@ -436,15 +513,6 @@
 
     // Helpers for template binding
     const canSend = computed(() => files.value.length > 0 && wsState.value === WsState.open);
-
-
-    // expose values used in template
-    // const _ = { fileList: fileListComputed }; // unused var to keep TS satisfied
-
-    // Replace usages in template with fileListComputed
-    // But we can't change template bindings after compile; so assign fileList to computed via alias
-    // -> We'll create a template-level ref using an alias:
-    // const fileListAlias = fileListComputed;
 
 </script>
 
