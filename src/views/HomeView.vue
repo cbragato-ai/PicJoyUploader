@@ -46,22 +46,32 @@
                     <p class="text-justify">Antes de começar preciso que se identifique para sua segurança.</p>
                     <p class="text-justify">Os dados coletados servirão para envio da Nota Fiscal após o pagamento.
                     </p>
+                    <p>Aceito os termos constantes em <a href=""></a></p>
                     <v-form ref="form" v-model="formValid">
                         <v-text-field label="E-mail" v-model="user.email" type="email" :rules="emailRules" required
                             variant="outlined" autofocus></v-text-field>
-                        <v-text-field label="CPF" v-model="user.cpf" type="text" :rules="cpfRules" required
+                        <v-checkbox label="CPF na Nota Fiscal" v-model="user.cpf_on_nf"></v-checkbox>
+                        <v-text-field label="CPF" v-if="user.cpf_on_nf" v-model="user.cpf" type="text" :rules="cpfRules"
                             v-mask="'###.###.###-##'" variant="outlined"></v-text-field>
-
+                        <v-checkbox label="Aceito os termos" v-model="user.accept_terms" required>
+                            <template v-slot:label>
+                                <span class="text-body-1">Aceito os <a href="https://picjoyclub.com/club/privacidade"
+                                        target="_blank">termos de uso</a></span>
+                            </template>
+                        </v-checkbox>
                     </v-form>
-                    <p class="text-justify">Antes de enviar os seus dados confira o código do quiosque.</p>
+                    <p class="text-justify">Antes de enviar os seus dados confira o código do quiosque (<b>{{ identifier
+                    }}</b>).</p>
                     <p class="text-justify">Ele aparece no canto inferior direito da tela.</p>
-                    <p class="text-justify">Compare com o identificador acima.Eles devem ser iguais.</p>
+                    <p class="text-justify">Compare com o identificador acima. Eles devem ser iguais. Em caso de
+                        divergência, entre em
+                        contato com o suporte. E não envie seus dados.</p>
 
                 </v-card-text>
                 <v-card-actions>
                     <v-spacer />
-                    <v-btn color="primary" @click="userDialogShow = false"
-                        :disabled="!formValid">Continuar</v-btn></v-card-actions>
+                    <v-btn color="primary" @click="sendUserData()"
+                        :disabled="!formValid || !user.accept_terms">Continuar</v-btn></v-card-actions>
             </v-card>
         </v-dialog>
         <v-dialog v-model="showDialog" persistent>
@@ -98,7 +108,7 @@
     const route = useRoute();
 
     const userDialogShow = ref(true);
-    const user = ref({ email: "", cpf: "" });
+    const user = ref({ email: "", cpf: "", cpf_on_nf: false, accept_terms: false });
 
     const id = ref("");
     const identifier = ref("");
@@ -182,6 +192,27 @@
 
         connectWebSocket();
     });
+
+    function sendUserData() {
+        if (!wsRef.value || wsState.value !== WsState.open) {
+            return;
+        }
+
+        const notify = {
+            type: "notify",
+            toSession: id.value,
+            message: "user_data",
+            from: `web-${id.value}`,
+            data: {
+                email: user.value.email,
+                cpf: user.value.cpf,
+                cpf_on_nf: user.value.cpf_on_nf,
+                accept_terms: user.value.accept_terms
+            },
+        };
+        wsRef.value.send(JSON.stringify(notify));
+        userDialogShow.value = false;
+    }
 
     onUnmounted(() => {
         if (wsRef.value) {
