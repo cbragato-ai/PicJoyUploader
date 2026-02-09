@@ -202,6 +202,7 @@
             type: "notify",
             toSession: id.value,
             message: "user_data",
+            action: "open-darkroom",
             from: `web-${id.value}`,
             data: {
                 email: user.value.email,
@@ -279,13 +280,6 @@
                     from: `web-${id.value}`,
                 };
                 ws.send(JSON.stringify(notify));
-                ws.send(JSON.stringify({
-                    type: "notify",
-                    toSession: id.value,
-                    action: "open-darkroom",
-                    message: "web_connected",
-                    from: `web-${id.value}`
-                }));
             });
 
             ws.addEventListener("message", (ev: MessageEvent) => {
