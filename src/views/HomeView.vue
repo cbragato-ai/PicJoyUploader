@@ -61,7 +61,7 @@
                         </v-checkbox>
                     </v-form>
                     <p class="text-justify">Antes de enviar os seus dados confira o código do quiosque (<b>{{ identifier
-                    }}</b>).</p>
+                            }}</b>).</p>
                     <p class="text-justify">Ele aparece no canto inferior direito da tela.</p>
                     <p class="text-justify">Compare com o identificador acima. Eles devem ser iguais. Em caso de
                         divergência, entre em
@@ -75,7 +75,7 @@
             </v-card>
         </v-dialog>
         <v-dialog v-model="showDialog" persistent>
-            <v-card class="bg-red-lighten-1 rounded-xl" width="90vwd">
+            <v-card class="bg-light-green-lighten-4 rounded-xl" width="90vwd">
                 <v-card-title class="text-center">Tranferência concluída!</v-card-title>
                 <v-card-text>
                     <p class="text-justify">Suas fotos já devem estar aparecendo na tela do kiosk. Customize e imprima
