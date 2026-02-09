@@ -84,6 +84,16 @@
                 </v-card-text>
             </v-card>
         </v-dialog>
+        <v-dialog v-model="showTimeoutDialog" persistent>
+            <v-card class="bg-light-green-lighten-4 rounded-xl" width="90vwd">
+                <v-card-title class="text-center">O tempo de conexão expirou!</v-card-title>
+                <v-card-text>
+                    <p class="text-justify">Reinicie o processo lendo o QRCode novamente.</p>
+                    <p class="text-justify">Fique atento à tela do kiosk, caso deseje mais tempo, toque em +1 minuto.
+                    </p>
+                </v-card-text>
+            </v-card>
+        </v-dialog>
     </v-container>
 </template>
 
@@ -115,6 +125,7 @@
     const bridgeServerAddress = ref("");
     const files = ref([] as File[]);
     const showDialog = ref(false);
+    const showTimeoutDialog = ref(false);
     enum WsState { "closed", "connecting", "open" }
 
     const wsRef = ref(null as WebSocket | null);
@@ -307,6 +318,8 @@
                     } else if (data.type === "ack-file" && data.fileName) {
                         // you can implement ACK handling if server sends it
                         console.debug("Server ACK file:", data.fileName);
+                    } else if (data.type === "timeout") {
+                        showTimeoutDialog.value = true;
                     } else {
                         // fallback log
                         console.debug("WS message:", data);
