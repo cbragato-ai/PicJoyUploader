@@ -61,7 +61,7 @@
                         </v-checkbox>
                     </v-form>
                     <p class="text-justify">Antes de enviar os seus dados confira o código do quiosque (<b>{{ identifier
-                            }}</b>).</p>
+                    }}</b>).</p>
                     <p class="text-justify">Ele aparece no canto inferior direito da tela.</p>
                     <p class="text-justify">Compare com o identificador acima. Eles devem ser iguais. Em caso de
                         divergência, entre em
@@ -319,6 +319,7 @@
                         // you can implement ACK handling if server sends it
                         console.debug("Server ACK file:", data.fileName);
                     } else if (data.type === "timeout") {
+                        console.warn("Kiosk sent timeout message");
                         showTimeoutDialog.value = true;
                     } else {
                         // fallback log
