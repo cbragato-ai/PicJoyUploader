@@ -46,7 +46,6 @@
                     <p class="text-justify">Antes de começar preciso que se identifique para sua segurança.</p>
                     <p class="text-justify">Os dados coletados servirão para envio da Nota Fiscal após o pagamento.
                     </p>
-                    <p>Aceito os termos constantes em <a href=""></a></p>
                     <v-form ref="form" v-model="formValid">
                         <v-text-field label="E-mail" v-model="user.email" type="email" :rules="emailRules" required
                             variant="outlined" autofocus></v-text-field>
@@ -61,7 +60,7 @@
                         </v-checkbox>
                     </v-form>
                     <p class="text-justify">Antes de enviar os seus dados confira o código do quiosque (<b>{{ identifier
-                    }}</b>).</p>
+                            }}</b>).</p>
                     <p class="text-justify">Ele aparece no canto inferior direito da tela.</p>
                     <p class="text-justify">Compare com o identificador acima. Eles devem ser iguais. Em caso de
                         divergência, entre em
