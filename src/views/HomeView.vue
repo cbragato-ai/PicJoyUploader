@@ -295,8 +295,11 @@
             ws.addEventListener("message", (ev: MessageEvent) => {
                 // Normalize payload (could be string or binary)
                 let text: string | null = null;
-                if (typeof ev.data === "string") text = ev.data;
-                else if (ev.data instanceof ArrayBuffer || ev.data instanceof Uint8Array) {
+
+                // Verify Message data
+                if (typeof ev.data === "string") {
+                    text = ev.data;
+                } else if (ev.data instanceof ArrayBuffer || ev.data instanceof Uint8Array) {
                     text = new TextDecoder("utf-8").decode(ev.data as any);
                 } else {
                     console.warn("WS received unknown data type", typeof ev.data);
