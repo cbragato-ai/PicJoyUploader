@@ -19,7 +19,8 @@
                             <div v-else-if="f.status === 'error'">❌ Erro</div>
                             <div v-else>{{ f.progress }}%</div>
                         </div>
-                        <v-progress-linear :value="f.progress" height="8" class="mt-2"></v-progress-linear>
+                        <v-progress-linear :model-value="f.progress" height="12" class="mt-2" color="pink-lighten-2"
+                            rounded striped></v-progress-linear>
                     </div>
                 </div>
             </v-card-text>
@@ -60,7 +61,7 @@
                         </v-checkbox>
                     </v-form>
                     <p class="text-justify">Antes de enviar os seus dados confira o código do quiosque (<b>{{ identifier
-                            }}</b>).</p>
+                    }}</b>).</p>
                     <p class="text-justify">Ele aparece no canto inferior direito da tela.</p>
                     <p class="text-justify">Compare com o identificador acima. Eles devem ser iguais. Em caso de
                         divergência, entre em
@@ -97,7 +98,7 @@
 </template>
 
 <script setup lang="ts">
-    import { ref, computed, onBeforeMount, onUnmounted } from "vue";
+    import { ref, computed, onBeforeMount, onUnmounted, reactive } from "vue";
     import { useRoute } from "vue-router";
     import axios from "axios";
 
@@ -234,16 +235,26 @@
     });
 
     const fileList = computed(() =>
-        (files.value as unknown as FileItem[]).map((f: FileItem) => ({
-            id: `${f.name}-${f.size}-${f.lastModified}`,
-            file: f,
-            name: f.name,
-            size: f.size,
-            progress: 0,
-            status: FileStatus.idle,
-            lastModified: f.lastModified,
-            seq: 0,
-        }))
+        (files.value as File[]).map((f) => {
+            const idKey = `${f.name}-${f.size}-${f.lastModified}`;
+            const cache = progressCache[idKey];
+
+            return {
+                id: idKey,
+                file: f,
+                name: f.name,
+                size: f.size,
+                progress: cache ? cache.progress : 0,
+                status: cache
+                    ? cache.status === "sending"
+                        ? FileStatus.sending
+                        : cache.status === "done"
+                            ? FileStatus.done
+                            : FileStatus.error
+                    : FileStatus.idle,
+                lastModified: f.lastModified,
+            } as FileItem;
+        })
     );
 
     // Helper: human readable size
@@ -493,14 +504,14 @@
                         // We cannot directly mutate File object; but we can keep a separate reactive structure if needed.
                         // For simplicity, update a local reactive map that the template reads via fileList computed.
                         // We'll update a small in-memory progress cache:
-                        progressCache.set(fileItem.id, { progress: p, status: "sending" });
+                        progressCache[fileItem.id] = { progress: p, status: "sending" };
                     }
                 });
 
-                progressCache.set(fileItem.id, { progress: 100, status: "done" });
+                progressCache[fileItem.id] = { progress: 100, status: "done" };
             } catch (err) {
                 console.error("Erro ao enviar arquivo:", err);
-                progressCache.set(fileItem.id, { progress: 0, status: "error" });
+                progressCache[fileItem.id] = { progress: 0, status: "error" };
                 // decide whether to continue or abort; we continue
             }
         }
@@ -522,35 +533,7 @@
     }
 
     // Progress cache used by template via fileListProgress helper
-    const progressCache = new Map<string, { progress: number; status: string }>();
-
-    // Expose computed fileList that includes progress from progressCache
-    /*const fileListComputed = computed(() =>
-        files.value.map((f: any) => {
-            const idKey = `${f.name}-${f.size}-${f.lastModified}`;
-            const cache = progressCache.get(idKey);
-
-            const status: FileStatus = cache
-                ? cache.status === "sending"
-                    ? FileStatus.sending
-                    : cache.status === "done"
-                        ? FileStatus.done
-                        : cache.status === "error"
-                            ? FileStatus.error
-                            : FileStatus.idle
-                : FileStatus.idle;
-
-            return {
-                id: idKey,
-                file: f,
-                name: f.name,
-                size: f.size,
-                progress: cache ? cache.progress : 0,
-                status,
-                lastModified: f.lastModified,
-            } as FileItem;
-        })
-    );*/
+    const progressCache = reactive<Record<string, { progress: number; status: string }>>({});
 
     // Helpers for template binding
     const canSend = computed(() => files.value.length > 0 && wsState.value === WsState.open);
