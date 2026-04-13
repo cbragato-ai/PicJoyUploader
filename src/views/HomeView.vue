@@ -126,6 +126,7 @@
     const files = ref([] as File[]);
     const showDialog = ref(false);
     const showTimeoutDialog = ref(false);
+    const concluded = ref(false);
     enum WsState { "closed", "connecting", "open" }
 
     const wsRef = ref(null as WebSocket | null);
@@ -365,6 +366,7 @@
     }
 
     function scheduleReconnect() {
+        if (concluded.value) return; // não reconectar se já concluído
         if (reconnectTimer.value) return;
         reconnectTimer.value = window.setTimeout(() => {
             reconnectTimer.value = null;
@@ -518,6 +520,7 @@
 
         // After all done, optionally notify server to inform the machine
         try {
+            concluded.value = true; // marca como concluído para evitar reconexões
             wsRef.value.send(
                 JSON.stringify({
                     type: "notify",
