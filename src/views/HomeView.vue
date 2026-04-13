@@ -61,7 +61,7 @@
                         </v-checkbox>
                     </v-form>
                     <p class="text-justify">Antes de enviar os seus dados confira o código do quiosque (<b>{{ identifier
-                    }}</b>).</p>
+                            }}</b>).</p>
                     <p class="text-justify">Ele aparece no canto inferior direito da tela.</p>
                     <p class="text-justify">Compare com o identificador acima. Eles devem ser iguais. Em caso de
                         divergência, entre em
@@ -526,6 +526,11 @@
                     from: `web-${id.value}`,
                 })
             );
+            if (wsRef.value) {
+                (wsRef.value as WebSocket).close();
+                wsRef.value = null;
+            }
+            if (reconnectTimer.value) window.clearTimeout(reconnectTimer.value);
             showDialog.value = true;
         } catch (e) {
             console.warn("Não foi possível enviar notify final", e);
