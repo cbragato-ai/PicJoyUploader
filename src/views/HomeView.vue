@@ -84,6 +84,15 @@
                 </v-card-text>
             </v-card>
         </v-dialog>
+        <v-dialog v-model="showDialogSessionLocked" persistent>
+            <v-card class="bg-light-green-lighten-4 rounded-xl" width="90vwd">
+                <v-card-title class="text-center">Tranferência concluída!</v-card-title>
+                <v-card-text>
+                    <p class="text-justify">O totem está sendo usado por outro usuário.</p>
+                    <p class="text-justify">Você deve fechar esta pagina e ler o QRCode novamente quando estiver disponível</p>
+                </v-card-text>
+            </v-card>
+        </v-dialog>
         <v-dialog v-model="showTimeoutDialog" persistent>
             <v-card class="bg-light-green-lighten-4 rounded-xl" width="90vwd">
                 <v-card-title class="text-center">O tempo de conexão expirou!</v-card-title>
@@ -125,6 +134,7 @@
     const bridgeServerAddress = ref("");
     const files = ref([] as File[]);
     const showDialog = ref(false);
+    const showDialogSessionLocked = ref(false);
     const showTimeoutDialog = ref(false);
     const concluded = ref(false);
     enum WsState { "closed", "connecting", "open" }
@@ -231,7 +241,6 @@
         if (wsRef.value) {
             (wsRef.value as WebSocket).close();
             wsRef.value = null;
-        }
         if (reconnectTimer.value) window.clearTimeout(reconnectTimer.value);
     });
 
@@ -317,10 +326,19 @@
                     console.warn("WS received unknown data type", typeof ev.data);
                 }
 
+                
                 if (!text) return;
 
                 try {
                     const data = JSON.parse(text);
+                    if (data.type === "session-locked") {
+
+                        showDialogSessionLocked.value=true;
+
+                        ws.close();
+
+                        return;
+                    }
                     // Example messages we expect from bridge -> machine -> web feedback:
                     // { type: 'device-status', sessionId: 'machine-1', status: 'online' }
                     // { type: 'ack-chunk', fileName, seq }
