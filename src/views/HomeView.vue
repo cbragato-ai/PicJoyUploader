@@ -200,7 +200,7 @@
     onBeforeMount(async () => {
         const code = route.params.id as string;
         const session = (await axios.get(
-            `https://bridge.picjoy.com.br/session/${code}`,
+            `https://bridge.picjoy.com.br/session/${code.toUpperCase()}`,
             {
                 headers: { "Content-Type": "application/json" }
             })).data;
