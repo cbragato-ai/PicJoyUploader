@@ -85,11 +85,11 @@
             </v-card>
         </v-dialog>
         <v-dialog v-model="showDialogSessionLocked" persistent>
-            <v-card class="bg-light-green-lighten-4 rounded-xl" width="90vwd">
-                <v-card-title class="text-center">Tranferência concluída!</v-card-title>
+            <v-card class="bg-light-red-lighten-4 rounded-xl" width="90vwd">
+                <v-card-title class="text-center">Ops! Não foi possivel prosseguir!</v-card-title>
                 <v-card-text>
-                    <p class="text-justify">O totem está sendo usado por outro usuário.</p>
-                    <p class="text-justify">Você deve fechar esta pagina e ler o QRCode novamente quando estiver disponível</p>
+                    <p class="text-justify">O totem está sendo usado por outro usuário no momento.</p>
+                    <p class="text-justify">Aguarde até que o mesmo esteja liberado.</p>
                 </v-card-text>
             </v-card>
         </v-dialog>
@@ -198,6 +198,11 @@
 
 
     onBeforeMount(async () => {
+        await connectSession();
+    });
+
+
+    async function connectSession(){
         const code = route.params.id as string;
         const session = (await axios.get(
             `https://bridge.picjoy.com.br/session/${code.toUpperCase()}`,
@@ -207,13 +212,20 @@
 
         console.log("Session data:", session);
 
-        identifier.value = code ?? "unknown";
-        id.value = code ?? "kiosk-session";
+        if(session.inUse){
+            showDialogSessionLocked.value = true;
+            setTimeout(async ()=>{
+                await connectSession();
+            })
+        }else{
+            showDialogSessionLocked.value = true;
+            identifier.value = code ?? "unknown";
+            id.value = code ?? "kiosk-session";
+            bridgeServerAddress.value = session.bridgeServerAddress;
+            connectWebSocket();
+        }
 
-        bridgeServerAddress.value = session.bridgeServerAddress;
-
-        connectWebSocket();
-    });
+    }
 
     function sendUserData() {
         if (!wsRef.value || wsState.value !== WsState.open) {
