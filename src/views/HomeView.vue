@@ -559,7 +559,9 @@
     }
 
     // Progress cache used by template via fileListProgress helper
-    const progressCache = reactive<Record<string, { progress: number; status: string }>>({});
+    // Progress cache used by template via fileListProgress helper
+    // Use a type assertion to avoid TS inference issues in .vue single-file component
+    const progressCache = reactive({} as Record<string, { progress: number; status: string }>);
 
     // Helpers for template binding
     const canSend = computed(() => files.value.length > 0 && wsState.value === WsState.open);
