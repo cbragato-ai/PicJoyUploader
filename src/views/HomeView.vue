@@ -110,8 +110,10 @@
     import { ref, computed, onBeforeMount, onUnmounted, reactive } from "vue";
     import { useRoute } from "vue-router";
     import axios from "axios";
+    import {v4 as uuid} from "uuid";
 
     enum FileStatus { "idle", "sending", "done", "error" }
+    const myID = uuid();
 
     type FileItem = {
         id: string;
@@ -205,20 +207,20 @@
     async function connectSession(){
         const code = route.params.id as string;
         const session = (await axios.get(
-            `https://bridge.picjoy.com.br/session/${code.toUpperCase()}`,
+            `https://bridge.picjoy.com.br/session/${code.toUpperCase()}/${myID}`,
             {
                 headers: { "Content-Type": "application/json" }
             })).data;
 
         console.log("Session data:", session);
 
-        if(session.inUse){
+        if(session.inUse && session.customerId !== myID){
             showDialogSessionLocked.value = true;
             setTimeout(async ()=>{
                 await connectSession();
             })
         }else{
-            showDialogSessionLocked.value = true;
+            showDialogSessionLocked.value = false;
             identifier.value = code ?? "unknown";
             id.value = code ?? "kiosk-session";
             bridgeServerAddress.value = session.bridgeServerAddress;
