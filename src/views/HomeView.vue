@@ -1,6 +1,6 @@
 <template>
     <v-container fluid>
-        <v-card class="rounded-xl elevation-10 ma-auto mt-1" width="80vw">
+        <v-card class="rounded-xl elevation-10 ma-auto mt-1" width="85vw">
             <v-card-title class="text-center">Enviando minhas fotos...</v-card-title>
             <v-card-subtitle class="text-pre-wrap">Selecione as fotos que vão para o quarto escuro</v-card-subtitle>
 
@@ -8,9 +8,15 @@
                 <hr />
                 <p class="text-h6">Identificador: <b>{{ identifier }}</b></p>
                 <hr class="mb-4" />
-                <v-file-input v-model="files" label="Escolha imagens" multiple accept="image/*" variant="outlined"
-                    density="comfortable"></v-file-input>
+                <div class="d-flex justify-center mb-4">
+                    <v-file-input ref="fileInputRef" v-model="files" multiple accept="image/*" class="file-input-hidden"
+                        :show-size="false" :hide-details="true" />
 
+                    <v-btn :disabled="canSend" variant="outlined" size="large" prepend-icon="fas fa-image"
+                        class="rounded-pill bg-success text-white" @click="openFileSelector">
+                        Selecionar fotos
+                    </v-btn>
+                </div>
                 <div v-if="fileList.length" class="mt-4">
                     <div v-for="f in fileList" :key="f.id" class="mb-3">
                         <div class="d-flex justify-space-between">
@@ -27,7 +33,8 @@
 
             <v-card-actions>
                 <v-spacer />
-                <v-btn :disabled="!canSend" color="primary" @click="sendFiles">Enviar</v-btn>
+                <v-btn :disabled="!canSend" class="rounded rounded-pill bg-success text-white"
+                    @click="sendFiles">Enviar</v-btn>
             </v-card-actions>
         </v-card>
 
@@ -61,16 +68,12 @@
                         </v-checkbox>
                     </v-form>
                     <p class="text-justify">Antes de enviar os seus dados confira o código do quiosque (<b>{{ identifier
-                    }}</b>).</p>
+                            }}</b>).</p>
                     <p class="text-justify">Ele aparece no canto inferior direito da tela.</p>
-                    <p class="text-justify">Compare com o identificador acima. Eles devem ser iguais. Em caso de
-                        divergência, entre em
-                        contato com o suporte. E não envie seus dados.</p>
-
                 </v-card-text>
                 <v-card-actions>
                     <v-spacer />
-                    <v-btn color="primary" @click="sendUserData()"
+                    <v-btn variant="outlined" class="rounded rounded-pill bg-success text-white" @click="sendUserData()"
                         :disabled="!formValid || !user.accept_terms">Continuar</v-btn></v-card-actions>
             </v-card>
         </v-dialog>
@@ -596,12 +599,28 @@ const progressCache = reactive<Record<string, { progress: number; status: string
 
 // Helpers for template binding
 const canSend = computed(() => files.value.length > 0 && wsState.value === WsState.open);
+const fileInputRef = ref<any>(null);
 
+function openFileSelector() {
+    const input = fileInputRef.value?.$el?.querySelector('input[type="file"]');
+
+    if (input) {
+        input.click();
+    }
+}
 </script>
 
 <style scoped>
 /* Pequeno ajuste de espaçamento */
 .v-card-text p {
     margin: 0.25rem 0;
+}
+
+.file-input-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
 }
 </style>
