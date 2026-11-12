@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import { webcrypto } from "node:crypto";
 
 // Executa o script real da tela, isolando somente Vue, rede e navegador.
 const source = readFileSync(new URL("../src/views/HomeView.vue", import.meta.url), "utf8")
@@ -16,11 +17,24 @@ vm.runInNewContext(ts.transpileModule(readFileSync(new URL("../src/libs/uploadLi
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText, { module: limitsModule, exports: limitsModule.exports });
 
-function setup({ canClose = false, closeThrows = false, failNotify = false, legacy = false, registered = true } = {}) {
+function loadHelper(name, mocks) {
+    const module = { exports: {} };
+    vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/libs/' + name + '.ts', import.meta.url), 'utf8'), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+    }).outputText, { module, exports: module.exports, require: name => mocks[name], crypto: webcrypto,
+        TextEncoder, Uint8Array, btoa, setTimeout, clearTimeout, Error });
+    return module.exports;
+}
+const protocol = loadHelper('confirmedProtocol', { './uploadLimits': limitsModule.exports });
+const sender = loadHelper('confirmedSender', { './confirmedProtocol': protocol });
+const until = async check => { for (let i = 0; i < 1000; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 1)); } throw Error('Teste não progrediu'); };
+
+function setup({ canClose = false, closeThrows = false, failNotify = false, legacy = false, registered = true, holdFinish = false } = {}) {
     const events = [];
     const timers = [];
     let socket;
     class FakeWebSocket {
+        readyState = 1; bufferedAmount = 0;
         listeners = new Map();
         messages = [];
         addEventListener(type, callback) {
@@ -34,9 +48,12 @@ function setup({ canClose = false, closeThrows = false, failNotify = false, lega
         constructor() { socket = this; }
         send(text) {
             const message = JSON.parse(text);
-            if (failNotify && message.message === "transfer_complete") throw new Error("Rede indisponível");
+            if (failNotify && message.operation === "finish") throw new Error("Rede indisponível");
             this.messages.push(message);
-            events.push(message.message ?? message.type);
+            events.push(({ start: 'file-meta', chunk: 'file-chunk', 'file-complete': 'file-complete', finish: 'transfer_complete' })[message.operation] ?? message.message ?? message.type);
+            if (message.type === 'upload-request' && !(holdFinish && message.operation === 'finish')) queueMicrotask(() => this.emit('message', {
+                data: JSON.stringify({ type: 'upload-ack', protocolVersion: 2, transferId: message.transferId, requestId: message.requestId }),
+            }));
         }
         close() { events.push("socket-close"); }
     }
@@ -67,22 +84,25 @@ function setup({ canClose = false, closeThrows = false, failNotify = false, lega
             if (name === "vue") return vue;
             if (name === "vue-router") return { useRoute: () => ({ params: { id: "TEST0001" } }) };
             if (name === "axios") return {};
-            if (name === "uuid") return { v4: () => "synthetic-id" };
+            if (name === "uuid") return { v4: (() => { let id = 0; return () => "synthetic-" + ++id; })() };
             if (name === "../libs/uploadLimits") return limitsModule.exports;
+            if (name === "../libs/confirmedProtocol") return protocol;
+            if (name === "../libs/confirmedSender") return sender;
             throw new Error("Import inesperado: " + name);
         },
         WebSocket: FakeWebSocket,
         window: browser,
         console: { log() {}, info() {}, debug() {}, warn() {}, error() {} },
-        Uint8Array, ArrayBuffer, TextDecoder, btoa, setTimeout,
+        Uint8Array, ArrayBuffer, TextDecoder, btoa, setTimeout, clearTimeout,
         alert() { events.push("alert"); },
     });
     exports.connectWebSocket();
     socket.emit("open");
     if (registered) socket.emit("message", { data: JSON.stringify({ type: "registered", role: "web",
-        ...(legacy ? {} : { protocolVersion: 1, uploadLimits: limitsModule.exports.UPLOAD_LIMITS }),
+        ...(legacy ? {} : { protocolVersion: 2, uploadLimits: limitsModule.exports.UPLOAD_LIMITS }),
     }) });
-    exports.files.value = [{ name: "foto-teste.jpg", size: 3, lastModified: 1, type: "image/jpeg",
+    exports.files.value = [{
+        slice(start, end) { return { arrayBuffer: async () => (await this.arrayBuffer()).slice(start, end) }; }, name: "foto-teste.jpg", size: 3, lastModified: 1, type: "image/jpeg",
         arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }];
     return { app: exports, socket, events, timers };
 }
@@ -115,7 +135,7 @@ test("redireciona ao PicJoy Club se window.close lançar erro", async () => {
     assert.equal(events.at(-1), "https://picjoyclub.com");
 });
 
-test("falha em um arquivo não conclui nem encerra o lote", async () => {
+test("falha de leitura aborta o lote sem sucesso nem fechar a aba", async () => {
     const { app, socket, events } = setup();
     app.files.value.push({ ...app.files.value[0], name: "outra-foto.jpg" });
     app.files.value[0].arrayBuffer = async () => { throw new Error("Falha ao ler arquivo"); };
@@ -123,9 +143,9 @@ test("falha em um arquivo não conclui nem encerra o lote", async () => {
     assert.equal(app.concluded.value, false);
     assert.equal(app.isSending.value, false);
     assert.equal(events.includes("transfer_complete"), false);
-    assert.equal(events.includes("socket-close"), false);
+    assert.equal(events.includes("window-close"), false);
     assert.equal(Object.values(app.progressCache)[0].status, "error");
-    assert.equal(Object.values(app.progressCache)[1].status, "done");
+    assert.equal(Object.values(app.progressCache)[1].status, "error");
     socket.emit("close", { wasClean: true });
     assert.equal(events.includes("window-close"), false);
 });
@@ -137,23 +157,24 @@ test("bloqueia segundo clique enquanto envia e novos envios após concluir", asy
     const pending = app.sendFiles();
     assert.equal(app.canSend.value, false);
     await app.sendFiles();
+    await until(() => release);
     release(new Uint8Array([1, 2, 3]).buffer);
     await pending;
     await app.sendFiles();
-    assert.equal(socket.messages.filter(message => message.type === "file-meta").length, 1);
-    assert.equal(socket.messages.filter(message => message.message === "transfer_complete").length, 1);
+    assert.equal(socket.messages.filter(message => message.operation === "start").length, 1);
+    assert.equal(socket.messages.filter(message => message.operation === "finish").length, 1);
 });
 
-test("falha na notificação final não marca conclusão nem fecha a aba", async () => {
+test("falha na notificação final encerra o socket sem concluir nem fechar a aba", async () => {
     const { app, socket, events } = setup({ failNotify: true });
     await app.sendFiles();
     assert.equal(app.concluded.value, false);
-    assert.equal(events.includes("socket-close"), false);
+    assert.equal(events.includes("socket-close"), true);
     socket.emit("close", { wasClean: true });
     assert.equal(events.includes("window-close"), false);
 });
 
-test("fechamento anormal após enfileirar o lote não fecha a aba nem reconecta", async () => {
+test("fechamento anormal após confirmar o lote não fecha a aba nem reconecta", async () => {
     const { app, socket, events, timers } = setup();
     await app.sendFiles();
     socket.emit("close", { wasClean: false });
@@ -162,28 +183,28 @@ test("fechamento anormal após enfileirar o lote não fecha a aba nem reconecta"
     assert.equal(timers.length, 0);
 });
 
-test("desconexão durante o uso preserva a reconexão existente", () => {
+test("desconexão após permissão não reconecta com uma permissão consumida", () => {
     const { socket, events, timers } = setup();
     socket.emit("close", { wasClean: false });
     assert.equal(events.includes("window-close"), false);
-    assert.equal(timers.length, 1);
-    assert.equal(timers[0].delay, 3000);
+    assert.equal(timers.length, 0);
 });
 
-test("aguarda registro e anuncia a versão do protocolo sem impedir Bridge legado", async () => {
+test("aguarda registro v2 e exige confirmação em vez de sucesso com Bridge legado", async () => {
     const pending = setup({ registered: false });
     assert.equal(pending.app.canSend.value, false);
     await pending.app.sendFiles();
-    assert.equal(pending.socket.messages.some(message => message.type === "file-meta"), false);
-    assert.equal(pending.socket.messages[0].protocolVersion, 1);
+    assert.equal(pending.socket.messages.some(message => message.operation === "start"), false);
+    assert.equal(pending.socket.messages[0].protocolVersion, 2);
     const legacy = setup({ legacy: true });
     await legacy.app.sendFiles();
-    assert.equal(legacy.app.concluded.value, true);
-    assert.equal(legacy.socket.messages.find(message => message.type === "file-meta").protocolVersion, undefined);
+    assert.equal(legacy.app.concluded.value, false);
+    assert.equal(legacy.app.canSend.value, false);
+    assert.match(legacy.app.uploadError.value, /atualizado/);
 });
 
-test("recusa 101 fotos, nomes repetidos e arquivo acima de 20 MiB antes de ler os dados", async () => {
-    for (const scenario of ['count', 'duplicate', 'size']) {
+test("recusa 101 fotos e arquivo acima de 20 MiB antes de ler os dados", async () => {
+    for (const scenario of ['count', 'size']) {
         const { app, socket } = setup();
         const original = app.files.value[0];
         let reads = 0;
@@ -194,7 +215,7 @@ test("recusa 101 fotos, nomes repetidos e arquivo acima de 20 MiB antes de ler o
         await app.sendFiles();
         assert.equal(reads, 0);
         assert.equal(app.uploadError.value.length > 0, true);
-        assert.equal(socket.messages.some(message => message.type === "file-meta"), false);
+        assert.equal(socket.messages.some(message => message.operation === "start"), false);
         assert.equal(app.concluded.value, false);
     }
 });
@@ -204,6 +225,7 @@ test("erro do Bridge interrompe o envio em curso sem sucesso, redirecionamento o
     let release;
     app.files.value[0].arrayBuffer = () => new Promise(resolve => { release = resolve; });
     const pending = app.sendFiles();
+    await until(() => release);
     socket.emit("message", { data: JSON.stringify({ type: "transfer-error", code: "UPLOAD_LIMIT_EXCEEDED", message: "Limite atingido." }) });
     release(new Uint8Array([1, 2, 3]).buffer);
     await pending;
@@ -226,4 +248,31 @@ test("rejeição após enfileirar o lote retira o diálogo de sucesso e mantém 
     assert.equal(app.concluded.value, false);
     assert.equal(app.uploadError.value, "Arquivo incompleto.");
     assert.equal(events.includes("window-close"), false);
+});
+
+test('não conclui nem fecha enquanto aguarda o processamento final do Kiosk', async () => {
+    const { app, socket, events } = setup({ holdFinish: true });
+    const running = app.sendFiles(); await until(() => socket.messages.some(message => message.operation === 'finish'));
+    assert.equal(app.concluded.value, false); assert.equal(app.showDialog.value, false);
+    assert.equal(app.isSending.value, true); assert.equal(events.includes('socket-close'), false);
+    const request = socket.messages.find(message => message.operation === 'finish');
+    socket.emit('message', { data: JSON.stringify({ type: 'upload-ack', protocolVersion: 2, transferId: request.transferId, requestId: request.requestId }) });
+    await running; assert.equal(app.concluded.value, true);
+});
+test('nomes iguais recebem IDs distintos no manifesto e progresso independente', async () => {
+    const { app, socket } = setup(); app.files.value.push({ ...app.files.value[0] }); await app.sendFiles();
+    const manifest = socket.messages.find(message => message.operation === 'start').files;
+    assert.equal(manifest.length, 2); assert.notEqual(manifest[0].fileId, manifest[1].fileId);
+    assert.equal(Object.keys(app.progressCache).length, 2); assert.equal(app.concluded.value, true);
+});
+
+test('lê somente fatias de até 48 KiB e não cria ArrayBuffer do arquivo inteiro', async () => {
+    const { app, socket } = setup(); let reads = 0, largest = 0;
+    const blob = new Blob([new Uint8Array(2 * 49152 + 1)], { type: 'image/jpeg' });
+    app.files.value = [{ name: 'paisagem.jpg', type: 'image/jpeg', size: blob.size, lastModified: 1,
+        arrayBuffer() { throw Error('Leitura integral proibida'); },
+        slice(start, end) { reads++; largest = Math.max(largest, end - start); return blob.slice(start, end); } }];
+    await app.sendFiles(); assert.equal(app.concluded.value, true);
+    assert.equal(reads, 3); assert.equal(largest, 49152);
+    assert.equal(socket.messages.filter(message => message.operation === 'chunk').length, 3);
 });

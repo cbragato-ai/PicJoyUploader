@@ -1,25 +1,26 @@
-# PicJoy Uploader
+Esta aplicação conecta o navegador ao PicJoyBridgeServer para enviar fotos ao Kiosk do PicJoy. Saiba mais em https://picjoy.com.br/.
 
-Esta aplicação se dedica a conexão com o servidor de WebSocket para enviar fotos para o Kiosk do PicJoy, para tratamento e impressão.
+## Envio confirmado — protocolo 2
 
-Saiba mais em https://picjoy.com.br/
+O uploader novo exige Bridge e Kiosk com suporte a `protocolVersion: 2`. A seleção admite até 100 fotos, 20 MiB por arquivo e 2 GiB por lote. Fotos com nomes iguais são independentes: o manifesto usa `fileId` próprio e o lote usa `transferId`.
+
+O QR Code do totem acrescenta `uploadTicket` à URL. A consulta existente `GET /session/:code/:customerId` recebe esse parâmetro; o registro WebSocket vincula a permissão ao mesmo cliente. A permissão tem uso único e prazo de 10 minutos para iniciar. Sucesso, erro, desconexão ou nova sessão no totem impedem reutilização. Voltar ao totem e reler o QR inicia outro processo; não há retomada automática de um lote parcial.
+
+O arquivo é lido com `File.slice()`, em blocos de até 48 KiB. Cada bloco leva SHA-256 e aguarda confirmação do Kiosk antes da leitura do próximo. Repetições usam a mesma requisição; não significam novo bloco. O progresso por foto indica recebimento confirmado. Depois de recebidas todas, a página informa que está aguardando o preparo do lote.
 
 ## Encerramento após o envio
 
-Após enviar todos os arquivos sem erro e a notificação `transfer_complete`, o uploader encerra o WebSocket e impede reconexões. Quando o fechamento da conexão é confirmado sem erro, tenta fechar a aba do navegador. Caso o navegador bloqueie `window.close()` (por exemplo, em uma aba aberta por QR Code), redireciona de `https://uploader.picjoy.com.br` para `https://picjoyclub.com` usando `location.replace()`, retirando o uploader e o código do totem da aba atual. A URL absoluta permite a navegação entre os domínios.
+A conclusão e o fechamento do WebSocket só ocorrem após o ACK final do Kiosk, emitido depois do preparo das imagens e backups. Após o close limpo, tenta `window.close()`; se a aba continuar aberta, usa `location.replace('https://picjoyclub.com')`, saindo de `https://uploader.picjoy.com.br`. O fallback entre domínios é preservado.
 
-Lotes com falha permanecem na página e não enviam a notificação de conclusão. O botão Enviar fica bloqueado durante o envio para impedir lotes duplicados. O protocolo atual ainda não confirma o recebimento/processamento pelo totem; essa evolução está descrita no relatório de análise do PicJoyKioskApp.
+Falha, timeout, processamento recusado ou desconexão não fecham a aba por sucesso nem reconectam o cliente com a permissão consumida. Fechar a aba não apaga entradas antigas do histórico; a proteção do fluxo novo também depende da revogação da permissão no Bridge. As restrições de fechamento são documentadas em [Window.close — MDN](https://developer.mozilla.org/en-US/docs/Web/API/Window/close).
 
-O fechamento é uma proteção local. Ele não revoga o endereço do QR Code no servidor nem remove entradas anteriores do histórico do navegador. A restrição do navegador está documentada em [Window.close() — MDN](https://developer.mozilla.org/en-US/docs/Web/API/Window/close).
+## Compatibilidade e validação
 
-Validação automatizada: `npm run test:upload`.
+Publicar Bridge, Kiosk e Uploader nessa ordem, coordenando a troca dos clientes. O Bridge mantém o protocolo 1 para pares antigos. O uploader novo recusa modo sem ACK ou totem incompatível, com erro visível, em vez de anunciar recebimento sem confirmação. Reverter somente o Bridge para uma versão antiga é incompatível com os clientes novos.
 
-O build usa os tipos fornecidos pelo próprio Vue. A declaração vazia `declare module "vue"` foi removida, pois ocultava esses tipos e causava os erros TS2347 em `reactive` e `ref`. `npm run build` executa a checagem de tipos e gera o bundle.
+Os limites de bytes não homologam sozinhos 100 fotos: a memória e o processamento do Kiosk continuam na etapa 3. A validação de resolução também continua pendente nessa etapa.
 
-## Contenção do envio — etapa 1
+- `npm run test:upload`: regressões do fluxo real da tela e do envio em blocos.
+- `npm run build`: tipos oficiais de Vue e bundle. A declaração vazia `declare module "vue"` foi removida na correção anterior dos erros TS2347.
 
-O uploader valida a seleção antes de ler as fotos: até 100 arquivos, 20 MiB por arquivo e 2 GiB por lote. Arquivos vazios ou com nomes repetidos são recusados. O limite de resolução será tratado nas próximas etapas de processamento.
-
-O registro anuncia `protocolVersion: 1`. O Bridge atualizado responde com `registered`, a versão e `uploadLimits`; o uploader aguarda esse registro para liberar o envio. Os limites anunciados podem reduzir os tetos locais. Um Bridge antigo que responde sem versão permanece compatível, usando os tetos locais do uploader, sem garantia de validação no servidor antigo.
-
-Mensagens `transfer-error` interrompem o envio, exibem o erro e impedem sucesso, redirecionamento e reconexão automática. O protocolo desta etapa continua sem ACK de recebimento por arquivo ou lote e sem controle de bytes em voo; os limites não representam homologação de 100 fotos em produção.
+O contrato coordenado e os resultados locais estão em `PicJoyKioskApp/api-documentation.md` e `PicJoyKioskApp/docs/analisis/`.

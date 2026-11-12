@@ -19,11 +19,12 @@
                         Selecionar fotos
                     </v-btn>
                 </div>
+                <v-alert v-if="awaitingPreparation" type="info" class="my-3">Fotos recebidas. Aguarde enquanto o totem prepara o lote.</v-alert>
                 <div v-if="fileList.length" class="mt-4">
                     <div v-for="f in fileList" :key="f.id" class="mb-3">
                         <div class="d-flex justify-space-between">
                             <div><strong>{{ f.name }}</strong> <small>({{ humanFileSize(f.size) }})kb</small></div>
-                            <div v-if="f.status === FileStatus.done">✅ Concluído</div>
+                            <div v-if="f.status === FileStatus.done">✅ Recebida</div>
                             <div v-else-if="f.status === FileStatus.error">❌ Erro</div>
                             <div v-else>{{ f.progress }}%</div>
                         </div>
@@ -76,14 +77,14 @@
                 <v-card-actions>
                     <v-spacer />
                     <v-btn variant="outlined" class="rounded rounded-pill bg-success text-white" @click="sendUserData()"
-                        :disabled="!formValid || !user.accept_terms">Continuar</v-btn></v-card-actions>
+                        :disabled="!formValid || !user.accept_terms || !protocolReady || protocolVersion !== CONFIRMED_PROTOCOL">Continuar</v-btn></v-card-actions>
             </v-card>
         </v-dialog>
         <v-dialog v-model="showDialog" persistent>
             <v-card class="bg-light-green-lighten-4 rounded-xl" width="90vwd">
                 <v-card-title class="text-center">Tranferência concluída!</v-card-title>
                 <v-card-text>
-                    <p class="text-justify">Suas fotos já devem estar aparecendo na tela do kiosk. Customize e imprima
+                    <p class="text-justify">Suas fotos foram recebidas e preparadas pelo kiosk. Customize e imprima
                         suas fotos a partir de lá.</p>
                     <p class="text-justify">Para novas fotos reinicie o processo lendo o QRCode novamente.</p>
                 </v-card-text>
@@ -125,7 +126,11 @@ import { ref, computed, onBeforeMount, onUnmounted, reactive } from "vue";
 import { useRoute } from "vue-router";
 import axios from "axios";
 import { v4 as uuid } from "uuid";
-import { UPLOAD_LIMITS, UPLOAD_PROTOCOL_VERSION, validateSelection } from "../libs/uploadLimits";
+import { UPLOAD_LIMITS, validateSelection } from "../libs/uploadLimits";
+
+import { CONFIRMED_PROTOCOL } from "../libs/confirmedProtocol";
+import { ConfirmedSender } from "../libs/confirmedSender";
+let activeSender: ConfirmedSender | undefined;
 
 enum FileStatus { "idle", "sending", "done", "error" }
 const myID = uuid();
@@ -170,7 +175,6 @@ const remoteStatus = ref(null);
 
 // Configs
 //const CHUNK_SIZE = 64 * 1024; // 64KB
-const MAX_RETRIES_PER_CHUNK = 3;
 const RECONNECT_DELAY_MS = 3000;
 
 const formValid = ref(false)
@@ -227,11 +231,12 @@ onBeforeMount(async () => {
 
 
 async function connectSession() {
-    const code = route.params.id as string;
+    const code = (route.params.id as string).toUpperCase();
     axios.get(
         `https://bridge.picjoy.com.br/session/${code.toUpperCase()}/${myID}`,
         {
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
+            params: { uploadTicket: route.query?.uploadTicket }
         }).then((response) => {
             const session = response.data as {
                 inUse: boolean;
@@ -252,10 +257,10 @@ async function connectSession() {
                 connectWebSocket();
             }
 
-        }).catch((error) => {
+        }).catch(() => {
             userDialogShow.value = false;
             showDialogSessionError.value = true;
-            console.log("error.data.message:", error);
+            uploadError.value = "Releia o QR Code atual junto ao totem. A permissão pode ter expirado ou já ter sido utilizada.";
         });
 }
 
@@ -282,6 +287,7 @@ function sendUserData() {
 }
 
 onUnmounted(() => {
+    activeSender?.abort();
     if (wsRef.value) {
         (wsRef.value as WebSocket).close();
         wsRef.value = null;
@@ -290,8 +296,8 @@ onUnmounted(() => {
 });
 
 const fileList = computed(() =>
-    (files.value as File[]).map((f) => {
-        const idKey = `${f.name}-${f.size}-${f.lastModified}`;
+    (files.value as File[]).map((f, index) => {
+        const idKey = `${index}:${f.name}-${f.size}-${f.lastModified}`;
         const cache = progressCache[idKey];
 
         return {
@@ -343,9 +349,10 @@ function connectWebSocket() {
             const registerMsg = {
                 type: "register",
                 role: "web",
-                id: `web-${id.value}`,
+                id: myID,
+                uploadTicket: route.query?.uploadTicket,
                 sessionId: `${id.value}`,
-                protocolVersion: UPLOAD_PROTOCOL_VERSION,
+                protocolVersion: CONFIRMED_PROTOCOL,
             };
             ws.send(JSON.stringify(registerMsg));
 
@@ -379,7 +386,8 @@ function connectWebSocket() {
             try {
                 const data = JSON.parse(text);
                 if (data.type === "registered") {
-                    protocolVersion.value = data.protocolVersion === UPLOAD_PROTOCOL_VERSION ? UPLOAD_PROTOCOL_VERSION : 0;
+                    protocolVersion.value = data.protocolVersion === CONFIRMED_PROTOCOL ? CONFIRMED_PROTOCOL : 0;
+                    if (!protocolVersion.value) uploadError.value = "O totem precisa ser atualizado para confirmar o recebimento das fotos.";
                     if (protocolVersion.value && data.uploadLimits) {
                         for (const key of Object.keys(UPLOAD_LIMITS) as (keyof typeof UPLOAD_LIMITS)[]) {
                             const limit = data.uploadLimits[key];
@@ -391,7 +399,9 @@ function connectWebSocket() {
                     protocolReady.value = true;
                     return;
                 }
+                if (data.type === "upload-ack") { activeSender?.accept(data); return; }
                 if (data.type === "transfer-error") {
+                    activeSender?.abort(typeof data.message === "string" ? data.message : undefined);
                     transferFailed.value = true;
                     concluded.value = false;
                     showDialog.value = false;
@@ -433,6 +443,10 @@ function connectWebSocket() {
 
         ws.addEventListener("close", (event: CloseEvent) => {
             console.warn("WS closed");
+            activeSender?.abort();
+            if (isSending.value && !concluded.value) {
+                transferFailed.value = true; uploadError.value ||= "A conexão foi interrompida. Reinicie junto ao totem.";
+            }
             wsRef.value = null;
             wsState.value = WsState.closed;
             protocolReady.value = false;
@@ -444,6 +458,9 @@ function connectWebSocket() {
                     // Abas abertas por QR Code podem bloquear window.close().
                     if (!window.closed) window.location.replace("https://picjoyclub.com");
                 }
+            }
+            if (protocolVersion.value === CONFIRMED_PROTOCOL && !concluded.value) {
+                transferFailed.value = true; uploadError.value ||= "Conexão encerrada. Releia o QR Code junto ao totem.";
             }
             scheduleReconnect();
         });
@@ -471,196 +488,42 @@ function scheduleReconnect() {
     }, RECONNECT_DELAY_MS);
 }
 
-// Convert ArrayBuffer -> Base64 (browser-friendly)
-function arrayBufferToBase64(buffer: ArrayBuffer) {
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-
-    const CHUNK = 0x8000; // evita stack overflow e unicode corruption
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-    }
-
-    return btoa(binary); // mantém padding correto
-}
-
-// Envia um arquivo inteiro fatiado em pedaços base64 via WebSocket
-async function sendSingleFile(
-    file: File,
-    toSession: string,
-    onProgress?: (p: number) => void
-) {
-    if (transferFailed.value || !wsRef.value || wsState.value !== WsState.open) {
-        throw new Error("WebSocket não conectado");
-    }
-
-    // 1. Lê o arquivo inteiro como ArrayBuffer
-    const buffer = await file.arrayBuffer();
-    if (transferFailed.value) throw new Error("Envio interrompido pelo totem.");
-
-    // 2. Converte buffer inteiro → base64
-    const base64Full = arrayBufferToBase64(buffer);
-
-    // 3. Envia metadados
-    const meta = {
-        type: "file-meta",
-        protocolVersion: protocolVersion.value || undefined,
-        toSession,
-        fileName: file.name,
-        size: file.size,
-        mime: file.type || "application/octet-stream",
-        totalBase64Length: base64Full.length,
-    };
-    wsRef.value.send(JSON.stringify(meta));
-
-    // 4. Fatiar a string base64 em pedaços seguros
-    const CHUNK = uploadLimits.value.maxChunkChars;
-    let seq = 0;
-    let sentChars = 0;
-
-    for (let offset = 0; offset < base64Full.length; offset += CHUNK) {
-        if (transferFailed.value) throw new Error("Envio interrompido pelo totem.");
-        const chunk = base64Full.slice(offset, offset + CHUNK);
-
-        const chunkMsg = {
-            type: "file-chunk",
-            toSession,
-            fileName: file.name,
-            seq,
-            chunkBase64: chunk,
-        };
-
-        // retry com robustez
-        let attempts = 0;
-        let sent = false;
-        while (attempts < MAX_RETRIES_PER_CHUNK && !sent) {
-            attempts++;
-            try {
-                wsRef.value.send(JSON.stringify(chunkMsg));
-                sent = true;
-            } catch (err) {
-                console.warn(
-                    `Erro ao enviar chunk seq=${seq}, tentativa=${attempts}`,
-                    err
-                );
-                if (attempts >= MAX_RETRIES_PER_CHUNK) {
-                    throw new Error(
-                        `Falha ao enviar chunk seq=${seq} do arquivo ${file.name}`
-                    );
-                }
-                await new Promise((r) => setTimeout(r, 200 * attempts));
-            }
-        }
-
-        sentChars += chunk.length;
-        seq++;
-
-        // 5. Atualiza progresso baseado no texto enviado
-        const progress = Math.min(
-            100,
-            Math.floor((sentChars / base64Full.length) * 100)
-        );
-        if (onProgress) onProgress(progress);
-
-        await new Promise((r) => setTimeout(r, 0)); // evita travar UI
-    }
-
-    // 6. Envia finalização
-    if (transferFailed.value) throw new Error("Envio interrompido pelo totem.");
-    const completeMsg = {
-        type: "file-complete",
-        toSession,
-        fileName: file.name,
-    };
-    wsRef.value.send(JSON.stringify(completeMsg));
-}
-
-// UI action: send all selected files
+// O sucesso só é anunciado depois do ACK final do Kiosk.
 async function sendFiles() {
-    if (!files.value?.length || isSending.value || concluded.value || transferFailed.value || !protocolReady.value) return;
-    if (!wsRef.value || wsState.value !== WsState.open) {
-        console.log(wsState.value)
-        alert("WebSocket não conectado ao bridge. Tente novamente.");
-        return;
-    }
-
-    uploadError.value = validateSelection(files.value, uploadLimits.value);
+    if (!canSend.value || !wsRef.value) return;
+    uploadError.value = validateSelection(files.value, uploadLimits.value, true);
     if (uploadError.value) return;
-
     isSending.value = true;
-    let hasErrors = false;
-
-    // map fileList to mutable objects to track progress
-    const list = fileList.value.map((f: any) => ({
-        ...f,
-        progress: 0,
-        status: "sending" as const,
-    }));
-
-    // We update the original `files` ref indirectly by creating a map
-    const statusMap = new Map<string, FileItem>();
-    for (const item of list) statusMap.set(item.id, item);
-
-    // Iterate sequentially (or parallelize if you want)
-    for (const fileItem of list) {
-        if (transferFailed.value) { hasErrors = true; break; }
-        try {
-            await sendSingleFile(fileItem.file, id.value, (p) => {
-                // update progress in the original files array (replace reactive content)
-                const idx = files.value.findIndex(
-                    (f: any) => `${f.name}-${f.size}-${f.lastModified}` === fileItem.id
-                );
-                if (idx >= 0) {
-                    // We cannot directly mutate File object; but we can keep a separate reactive structure if needed.
-                    // For simplicity, update a local reactive map that the template reads via fileList computed.
-                    // We'll update a small in-memory progress cache:
-                    progressCache[fileItem.id] = { progress: p, status: "sending" };
-                }
-            });
-
-            progressCache[fileItem.id] = { progress: 100, status: "done" };
-        } catch (err) {
-            hasErrors = true;
-            console.error("Erro ao enviar arquivo:", err);
-            progressCache[fileItem.id] = { progress: 0, status: "error" };
-            // decide whether to continue or abort; we continue
-        }
-    }
-
-    isSending.value = false;
-    if (hasErrors || transferFailed.value) {
-        if (!uploadError.value) uploadError.value = "Algumas fotos não foram enviadas. Reinicie o processo junto ao totem.";
-        return;
-    }
-
-    // After all done, optionally notify server to inform the machine
+    const list = fileList.value;
+    activeSender = new ConfirmedSender(wsRef.value, uuid);
     try {
-        wsRef.value.send(
-            JSON.stringify({
-                type: "notify",
-                toSession: id.value,
-                message: "transfer_complete",
-                from: `web-${id.value}`,
-            })
-        );
-        concluded.value = true; // marca como concluído para evitar reconexões
-        if (wsRef.value) {
-            (wsRef.value as WebSocket).close();
-            wsRef.value = null;
-        }
-        if (reconnectTimer.value) window.clearTimeout(reconnectTimer.value);
+        await activeSender.send(files.value, (index, progress, done) => {
+            progressCache[list[index]!.id] = { progress, status: done ? "done" : "sending" };
+        });
+        if (transferFailed.value) throw new Error("Envio interrompido.");
+        concluded.value = true;
         showDialog.value = true;
-    } catch (e) {
-        console.warn("Não foi possível enviar notify final", e);
-    }
+        if (reconnectTimer.value) window.clearTimeout(reconnectTimer.value);
+        wsRef.value?.close();
+    } catch (error) {
+        transferFailed.value = true;
+        uploadError.value ||= error instanceof Error ? error.message : "Falha no envio. Reinicie junto ao totem.";
+        showDialog.value = false;
+        for (const item of list) {
+            if (progressCache[item.id]?.status !== "done") progressCache[item.id] = { progress: 0, status: "error" };
+        }
+        wsRef.value?.close();
+    } finally { isSending.value = false; activeSender = undefined; }
 }
 
 // Progress cache used by template via fileListProgress helper
 const progressCache = reactive<Record<string, { progress: number; status: string }>>({});
 
 // Helpers for template binding
+const awaitingPreparation = computed(() => isSending.value && files.value.length > 0
+    && fileList.value.every(file => file.status === FileStatus.done));
 const canSend = computed(() => files.value.length > 0 && wsState.value === WsState.open
-    && protocolReady.value && !isSending.value && !concluded.value && !transferFailed.value);
+    && protocolReady.value && protocolVersion.value === CONFIRMED_PROTOCOL && !isSending.value && !concluded.value && !transferFailed.value);
 const fileInputRef = ref<any>(null);
 
 function openFileSelector() {
