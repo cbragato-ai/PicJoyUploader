@@ -12,7 +12,7 @@
                     <v-file-input ref="fileInputRef" v-model="files" multiple accept="image/*" class="file-input-hidden"
                         :show-size="false" :hide-details="true" />
 
-                    <v-btn :disabled="canSend" variant="outlined" size="large" prepend-icon="fas fa-image"
+                    <v-btn :disabled="canSend || isSending || concluded" variant="outlined" size="large" prepend-icon="fas fa-image"
                         class="rounded-pill bg-success text-white" @click="openFileSelector">
                         Selecionar fotos
                     </v-btn>
@@ -152,6 +152,7 @@ const showDialogSessionLocked = ref(false);
 const showDialogSessionError = ref(false);
 const showTimeoutDialog = ref(false);
 const concluded = ref(false);
+const isSending = ref(false);
 enum WsState { "closed", "connecting", "open" }
 
 const wsRef = ref(null as WebSocket | null);
@@ -398,10 +399,19 @@ function connectWebSocket() {
             }
         });
 
-        ws.addEventListener("close", () => {
+        ws.addEventListener("close", (event: CloseEvent) => {
             console.warn("WS closed");
             wsRef.value = null;
             wsState.value = WsState.closed;
+            if (concluded.value && event.wasClean) {
+                // Aguarda o fechamento do socket para não interromper dados ainda na fila.
+                try {
+                    window.close();
+                } finally {
+                    // Abas abertas por QR Code podem bloquear window.close().
+                    if (!window.closed) window.location.replace("about:blank");
+                }
+            }
             scheduleReconnect();
         });
 
@@ -530,12 +540,15 @@ async function sendSingleFile(
 
 // UI action: send all selected files
 async function sendFiles() {
-    if (!files.value?.length) return;
+    if (!files.value?.length || isSending.value || concluded.value) return;
     if (!wsRef.value || wsState.value !== WsState.open) {
         console.log(wsState.value)
         alert("WebSocket não conectado ao bridge. Tente novamente.");
         return;
     }
+
+    isSending.value = true;
+    let hasErrors = false;
 
     // map fileList to mutable objects to track progress
     const list = fileList.value.map((f: any) => ({
@@ -566,15 +579,18 @@ async function sendFiles() {
 
             progressCache[fileItem.id] = { progress: 100, status: "done" };
         } catch (err) {
+            hasErrors = true;
             console.error("Erro ao enviar arquivo:", err);
             progressCache[fileItem.id] = { progress: 0, status: "error" };
             // decide whether to continue or abort; we continue
         }
     }
 
+    isSending.value = false;
+    if (hasErrors) return;
+
     // After all done, optionally notify server to inform the machine
     try {
-        concluded.value = true; // marca como concluído para evitar reconexões
         wsRef.value.send(
             JSON.stringify({
                 type: "notify",
@@ -583,6 +599,7 @@ async function sendFiles() {
                 from: `web-${id.value}`,
             })
         );
+        concluded.value = true; // marca como concluído para evitar reconexões
         if (wsRef.value) {
             (wsRef.value as WebSocket).close();
             wsRef.value = null;
@@ -598,7 +615,8 @@ async function sendFiles() {
 const progressCache = reactive<Record<string, { progress: number; status: string }>>({});
 
 // Helpers for template binding
-const canSend = computed(() => files.value.length > 0 && wsState.value === WsState.open);
+const canSend = computed(() => files.value.length > 0 && wsState.value === WsState.open
+    && !isSending.value && !concluded.value);
 const fileInputRef = ref<any>(null);
 
 function openFileSelector() {
