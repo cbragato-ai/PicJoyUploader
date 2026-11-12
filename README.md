@@ -14,6 +14,8 @@ O fechamento é uma proteção local. Ele não revoga o endereço do QR Code no 
 
 Validação automatizada: `npm run test:upload`.
 
+O build usa os tipos fornecidos pelo próprio Vue. A declaração vazia `declare module "vue"` foi removida, pois ocultava esses tipos e causava os erros TS2347 em `reactive` e `ref`. `npm run build` executa a checagem de tipos e gera o bundle.
+
 ## Contenção do envio — etapa 1
 
 O uploader valida a seleção antes de ler as fotos: até 100 arquivos, 20 MiB por arquivo e 2 GiB por lote. Arquivos vazios ou com nomes repetidos são recusados. O limite de resolução será tratado nas próximas etapas de processamento.
