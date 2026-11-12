@@ -8,13 +8,14 @@
                 <hr />
                 <p class="text-h6">Identificador: <b>{{ identifier }}</b></p>
                 <hr class="mb-4" />
-                <p>Envie até 100 fotos, com no máximo 20 MiB por foto e 2 GiB no total.</p>
+                <p v-if="protocolReady">Este totem permite enviar até {{ uploadLimits.maxFiles }} foto(s), conforme o saldo disponível para impressão.</p>
+                <p v-else>Consultando a disponibilidade do totem...</p>
                 <v-alert v-if="uploadError" type="error" class="my-3">{{ uploadError }}</v-alert>
                 <div class="d-flex justify-center mb-4">
                     <v-file-input ref="fileInputRef" v-model="files" multiple accept="image/*" class="file-input-hidden"
                         :show-size="false" :hide-details="true" />
 
-                    <v-btn :disabled="isSending || concluded || transferFailed" variant="outlined" size="large" prepend-icon="fas fa-image"
+                    <v-btn :disabled="isSending || concluded || transferFailed || uploadLimits.maxFiles === 0" variant="outlined" size="large" prepend-icon="fas fa-image"
                         class="rounded-pill bg-success text-white" @click="openFileSelector">
                         Selecionar fotos
                     </v-btn>
@@ -23,7 +24,7 @@
                 <div v-if="fileList.length" class="mt-4">
                     <div v-for="f in fileList" :key="f.id" class="mb-3">
                         <div class="d-flex justify-space-between">
-                            <div><strong>{{ f.name }}</strong> <small>({{ humanFileSize(f.size) }})kb</small></div>
+                            <div><strong>{{ f.name }}</strong> <small>({{ humanFileSize(f.size) }})</small></div>
                             <div v-if="f.status === FileStatus.done">✅ Recebida</div>
                             <div v-else-if="f.status === FileStatus.error">❌ Erro</div>
                             <div v-else>{{ f.progress }}%</div>
@@ -165,7 +166,7 @@ const uploadError = ref("");
 const transferFailed = ref(false);
 const protocolReady = ref(false);
 const protocolVersion = ref(0);
-const uploadLimits = ref({ ...UPLOAD_LIMITS });
+const uploadLimits = ref({ ...UPLOAD_LIMITS, maxFiles: 0 });
 enum WsState { "closed", "connecting", "open" }
 
 const wsRef = ref(null as WebSocket | null);
@@ -320,9 +321,9 @@ const fileList = computed(() =>
 
 // Helper: human readable size
 function humanFileSize(bytes: number) {
-    const thresh = 1024;
+    const thresh = 1000;
     if (Math.abs(bytes) < thresh) return bytes + " B";
-    const units = ["KB", "MB", "GB", "TB"];
+    const units = ["kB", "MB", "GB", "TB"];
     let u = -1;
     do {
         bytes /= thresh;
@@ -391,11 +392,14 @@ function connectWebSocket() {
                     if (protocolVersion.value && data.uploadLimits) {
                         for (const key of Object.keys(UPLOAD_LIMITS) as (keyof typeof UPLOAD_LIMITS)[]) {
                             const limit = data.uploadLimits[key];
-                            if (Number.isSafeInteger(limit) && limit > 0) {
+                            if (Number.isSafeInteger(limit) && (limit > 0 || (key === "maxFiles" && limit === 0))) {
                                 uploadLimits.value[key] = Math.min(UPLOAD_LIMITS[key], limit);
                             }
                         }
                     }
+                    if (!data.printCapacity || !Number.isSafeInteger(data.printCapacity.maxFiles) || data.printCapacity.maxFiles < 0) uploadLimits.value.maxFiles = 0;
+                    else uploadLimits.value.maxFiles = Math.min(uploadLimits.value.maxFiles, data.printCapacity.maxFiles);
+                    if (protocolVersion.value && uploadLimits.value.maxFiles === 0) uploadError.value = "Envio indisponível. Confirme o saldo de impressão no totem.";
                     protocolReady.value = true;
                     return;
                 }
@@ -523,7 +527,7 @@ const progressCache = reactive<Record<string, { progress: number; status: string
 const awaitingPreparation = computed(() => isSending.value && files.value.length > 0
     && fileList.value.every(file => file.status === FileStatus.done));
 const canSend = computed(() => files.value.length > 0 && wsState.value === WsState.open
-    && protocolReady.value && protocolVersion.value === CONFIRMED_PROTOCOL && !isSending.value && !concluded.value && !transferFailed.value);
+    && uploadLimits.value.maxFiles > 0 && protocolReady.value && protocolVersion.value === CONFIRMED_PROTOCOL && !isSending.value && !concluded.value && !transferFailed.value);
 const fileInputRef = ref<any>(null);
 
 function openFileSelector() {

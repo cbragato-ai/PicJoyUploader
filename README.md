@@ -2,7 +2,7 @@ Esta aplicação conecta o navegador ao PicJoyBridgeServer para enviar fotos ao 
 
 ## Envio confirmado — protocolo 2
 
-O uploader novo exige Bridge e Kiosk com suporte a `protocolVersion: 2`. A seleção admite até 100 fotos, 20 MiB por arquivo e 2 GiB por lote. Fotos com nomes iguais são independentes: o manifesto usa `fileId` próprio e o lote usa `transferId`.
+O uploader novo exige Bridge e Kiosk com suporte a `protocolVersion: 2`. A seleção não tem teto comercial por MB, por arquivo ou por lote. A quantidade é limitada ao menor valor entre 100 e o saldo confirmado de impressão informado pelo Kiosk. Fotos com nomes iguais são independentes: o manifesto usa `fileId` próprio e o lote usa `transferId`.
 
 O QR Code do totem acrescenta `uploadTicket` à URL. A consulta existente `GET /session/:code/:customerId` recebe esse parâmetro; o registro WebSocket vincula a permissão ao mesmo cliente. A permissão tem uso único e prazo de 10 minutos para iniciar. Sucesso, erro, desconexão ou nova sessão no totem impedem reutilização. Voltar ao totem e reler o QR inicia outro processo; não há retomada automática de um lote parcial.
 
@@ -24,3 +24,11 @@ Os limites de bytes não homologam sozinhos 100 fotos: a memória e o processame
 - `npm run build`: tipos oficiais de Vue e bundle. A declaração vazia `declare module "vue"` foi removida na correção anterior dos erros TS2347.
 
 O contrato coordenado e os resultados locais estão em `PicJoyKioskApp/api-documentation.md` e `PicJoyKioskApp/docs/analisis/`.
+
+## Saldo de impressão
+
+O registro v2 precisa informar `printCapacity.maxFiles` e `uploadLimits.maxFiles`. Saldo zero, desconhecido ou servidor sem essa confirmação impede o envio. O limite aparece antes de enviar as fotos; excedê-lo é recusado antes de ler os arquivos. O Bridge impõe o mesmo teto ao manifesto.
+
+O Kiosk consulta o SDK da ASK-400, ou a contabilidade para outras impressoras, ao abrir a permissão. Revalida ao iniciar e ao concluir o lote. O upload não reserva estoque fisicamente; cópias, formatos e impressão final seguem as verificações da aplicação.
+
+Blocos de 48 KiB, frames de 128 KiB e janela global continuam limitando a memória do transporte. Os campos antigos de bytes permanecem por compatibilidade, usando o maior inteiro exato do JavaScript para validar metadados, sem os tetos anteriores de 20 MiB/2 GiB.

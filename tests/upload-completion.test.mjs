@@ -29,7 +29,7 @@ const protocol = loadHelper('confirmedProtocol', { './uploadLimits': limitsModul
 const sender = loadHelper('confirmedSender', { './confirmedProtocol': protocol });
 const until = async check => { for (let i = 0; i < 1000; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 1)); } throw Error('Teste não progrediu'); };
 
-function setup({ canClose = false, closeThrows = false, failNotify = false, legacy = false, registered = true, holdFinish = false } = {}) {
+function setup({ canClose = false, closeThrows = false, failNotify = false, legacy = false, registered = true, holdFinish = false, capacity = 100, capacityKnown = true } = {}) {
     const events = [];
     const timers = [];
     let socket;
@@ -99,7 +99,8 @@ function setup({ canClose = false, closeThrows = false, failNotify = false, lega
     exports.connectWebSocket();
     socket.emit("open");
     if (registered) socket.emit("message", { data: JSON.stringify({ type: "registered", role: "web",
-        ...(legacy ? {} : { protocolVersion: 2, uploadLimits: limitsModule.exports.UPLOAD_LIMITS }),
+        ...(legacy ? {} : { protocolVersion: 2, uploadLimits: { ...limitsModule.exports.UPLOAD_LIMITS, maxFiles: capacity },
+            ...(capacityKnown ? { printCapacity: { maxFiles: capacity } } : {}) }),
     }) });
     exports.files.value = [{
         slice(start, end) { return { arrayBuffer: async () => (await this.arrayBuffer()).slice(start, end) }; }, name: "foto-teste.jpg", size: 3, lastModified: 1, type: "image/jpeg",
@@ -203,7 +204,7 @@ test("aguarda registro v2 e exige confirmação em vez de sucesso com Bridge leg
     assert.match(legacy.app.uploadError.value, /atualizado/);
 });
 
-test("recusa 101 fotos e arquivo acima de 20 MiB antes de ler os dados", async () => {
+test("recusa quantidade excedente e arquivo vazio antes de ler os dados", async () => {
     for (const scenario of ['count', 'size']) {
         const { app, socket } = setup();
         const original = app.files.value[0];
@@ -211,7 +212,7 @@ test("recusa 101 fotos e arquivo acima de 20 MiB antes de ler os dados", async (
         original.arrayBuffer = async () => { reads++; throw new Error("Não deve ler"); };
         if (scenario === 'count') app.files.value = Array.from({ length: 101 }, (_, i) => ({ ...original, name: i + '.jpg' }));
         if (scenario === 'duplicate') app.files.value.push({ ...original });
-        if (scenario === 'size') original.size = 20 * 1024 * 1024 + 1;
+        if (scenario === 'size') original.size = 0;
         await app.sendFiles();
         assert.equal(reads, 0);
         assert.equal(app.uploadError.value.length > 0, true);
@@ -275,4 +276,21 @@ test('lê somente fatias de até 48 KiB e não cria ArrayBuffer do arquivo intei
     await app.sendFiles(); assert.equal(app.concluded.value, true);
     assert.equal(reads, 3); assert.equal(largest, 49152);
     assert.equal(socket.messages.filter(message => message.operation === 'chunk').length, 3);
+});
+
+test('limite de seleção segue o saldo; zero ou capacidade não confirmada impedem envio', async () => {
+    for (const options of [{ capacity: 0 }, { capacityKnown: false }]) {
+        const { app, socket } = setup(options); assert.equal(app.canSend.value, false); await app.sendFiles();
+        assert.equal(socket.messages.some(message => message.operation === 'start'), false);
+    }
+    const { app, socket } = setup({ capacity: 1 }); app.files.value.push({ ...app.files.value[0], name: 'outra.jpg' });
+    await app.sendFiles(); assert.match(app.uploadError.value, /até 1/);
+    assert.equal(socket.messages.some(message => message.operation === 'start'), false);
+});
+test('arquivo acima do antigo teto de 20 MiB é enviado sem leitura integral', async () => {
+    const { app } = setup({ capacity: 1 });
+    const blob = new Blob([new Uint8Array(21 * 1024 * 1024)], { type: 'image/jpeg' }); let reads = 0;
+    app.files.value = [{ name: 'grande.jpg', type: 'image/jpeg', size: blob.size, lastModified: 1,
+        arrayBuffer() { throw Error('Leitura integral proibida'); }, slice(start, end) { reads++; return blob.slice(start, end); } }];
+    await app.sendFiles(); assert.equal(app.concluded.value, true); assert.equal(reads > 400, true);
 });
