@@ -42,7 +42,10 @@ function setup({ canClose = false, closeThrows = false, failNotify = false } = {
             if (closeThrows) throw new Error("Fechamento bloqueado");
             this.closed = canClose;
         },
-        location: { replace(url) { events.push(url); } },
+        location: {
+            href: "https://uploader.picjoy.com.br/TEST0001",
+            replace(url) { events.push(url); },
+        },
         setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length; },
         clearTimeout() {},
     };
@@ -84,23 +87,23 @@ test("aguarda o fechamento limpo do socket antes de fechar a aba", async () => {
     assert.deepEqual(events.slice(-4), ["file-chunk", "file-complete", "transfer_complete", "socket-close"]);
     socket.emit("close", { wasClean: true });
     assert.equal(events.at(-1), "window-close");
-    assert.equal(events.includes("about:blank"), false);
+    assert.equal(events.includes("https://picjoyclub.com"), false);
     assert.equal(timers.length, 0);
 });
 
-test("substitui a página quando o navegador mantém a aba aberta", async () => {
+test("redireciona do uploader ao PicJoy Club quando a aba permanece aberta", async () => {
     const { app, socket, events, timers } = setup();
     await app.sendFiles();
     socket.emit("close", { wasClean: true });
-    assert.deepEqual(events.slice(-2), ["window-close", "about:blank"]);
+    assert.deepEqual(events.slice(-2), ["window-close", "https://picjoyclub.com"]);
     assert.equal(timers.length, 0);
 });
 
-test("mantém página em branco se window.close lançar erro", async () => {
+test("redireciona ao PicJoy Club se window.close lançar erro", async () => {
     const { app, socket, events } = setup({ closeThrows: true });
     await app.sendFiles();
     assert.throws(() => socket.emit("close", { wasClean: true }), /Fechamento bloqueado/);
-    assert.equal(events.at(-1), "about:blank");
+    assert.equal(events.at(-1), "https://picjoyclub.com");
 });
 
 test("falha em um arquivo não conclui nem encerra o lote", async () => {
@@ -146,7 +149,7 @@ test("fechamento anormal após enfileirar o lote não fecha a aba nem reconecta"
     await app.sendFiles();
     socket.emit("close", { wasClean: false });
     assert.equal(events.includes("window-close"), false);
-    assert.equal(events.includes("about:blank"), false);
+    assert.equal(events.includes("https://picjoyclub.com"), false);
     assert.equal(timers.length, 0);
 });
 

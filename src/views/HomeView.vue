@@ -409,7 +409,7 @@ function connectWebSocket() {
                     window.close();
                 } finally {
                     // Abas abertas por QR Code podem bloquear window.close().
-                    if (!window.closed) window.location.replace("about:blank");
+                    if (!window.closed) window.location.replace("https://picjoyclub.com");
                 }
             }
             scheduleReconnect();
