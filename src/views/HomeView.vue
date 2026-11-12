@@ -8,11 +8,13 @@
                 <hr />
                 <p class="text-h6">Identificador: <b>{{ identifier }}</b></p>
                 <hr class="mb-4" />
+                <p>Envie até 100 fotos, com no máximo 20 MiB por foto e 2 GiB no total.</p>
+                <v-alert v-if="uploadError" type="error" class="my-3">{{ uploadError }}</v-alert>
                 <div class="d-flex justify-center mb-4">
                     <v-file-input ref="fileInputRef" v-model="files" multiple accept="image/*" class="file-input-hidden"
                         :show-size="false" :hide-details="true" />
 
-                    <v-btn :disabled="canSend || isSending || concluded" variant="outlined" size="large" prepend-icon="fas fa-image"
+                    <v-btn :disabled="isSending || concluded || transferFailed" variant="outlined" size="large" prepend-icon="fas fa-image"
                         class="rounded-pill bg-success text-white" @click="openFileSelector">
                         Selecionar fotos
                     </v-btn>
@@ -21,8 +23,8 @@
                     <div v-for="f in fileList" :key="f.id" class="mb-3">
                         <div class="d-flex justify-space-between">
                             <div><strong>{{ f.name }}</strong> <small>({{ humanFileSize(f.size) }})kb</small></div>
-                            <div v-if="f.status === 'done'">✅ Concluído</div>
-                            <div v-else-if="f.status === 'error'">❌ Erro</div>
+                            <div v-if="f.status === FileStatus.done">✅ Concluído</div>
+                            <div v-else-if="f.status === FileStatus.error">❌ Erro</div>
                             <div v-else>{{ f.progress }}%</div>
                         </div>
                         <v-progress-linear :model-value="f.progress" height="12" class="mt-2" color="pink-lighten-2"
@@ -123,6 +125,7 @@ import { ref, computed, onBeforeMount, onUnmounted, reactive } from "vue";
 import { useRoute } from "vue-router";
 import axios from "axios";
 import { v4 as uuid } from "uuid";
+import { UPLOAD_LIMITS, UPLOAD_PROTOCOL_VERSION, validateSelection } from "../libs/uploadLimits";
 
 enum FileStatus { "idle", "sending", "done", "error" }
 const myID = uuid();
@@ -153,6 +156,11 @@ const showDialogSessionError = ref(false);
 const showTimeoutDialog = ref(false);
 const concluded = ref(false);
 const isSending = ref(false);
+const uploadError = ref("");
+const transferFailed = ref(false);
+const protocolReady = ref(false);
+const protocolVersion = ref(0);
+const uploadLimits = ref({ ...UPLOAD_LIMITS });
 enum WsState { "closed", "connecting", "open" }
 
 const wsRef = ref(null as WebSocket | null);
@@ -235,7 +243,7 @@ async function connectSession() {
                 showDialogSessionLocked.value = true;
                 setTimeout(async () => {
                     await connectSession();
-                })
+                }, RECONNECT_DELAY_MS)
             } else {
                 showDialogSessionLocked.value = false;
                 identifier.value = code ?? "unknown";
@@ -327,6 +335,7 @@ function connectWebSocket() {
         const ws = new WebSocket(url);
 
         ws.addEventListener("open", () => {
+            protocolReady.value = false;
             wsState.value = WsState.open;
             console.info("WS connected to", url);
 
@@ -336,6 +345,7 @@ function connectWebSocket() {
                 role: "web",
                 id: `web-${id.value}`,
                 sessionId: `${id.value}`,
+                protocolVersion: UPLOAD_PROTOCOL_VERSION,
             };
             ws.send(JSON.stringify(registerMsg));
 
@@ -368,6 +378,28 @@ function connectWebSocket() {
 
             try {
                 const data = JSON.parse(text);
+                if (data.type === "registered") {
+                    protocolVersion.value = data.protocolVersion === UPLOAD_PROTOCOL_VERSION ? UPLOAD_PROTOCOL_VERSION : 0;
+                    if (protocolVersion.value && data.uploadLimits) {
+                        for (const key of Object.keys(UPLOAD_LIMITS) as (keyof typeof UPLOAD_LIMITS)[]) {
+                            const limit = data.uploadLimits[key];
+                            if (Number.isSafeInteger(limit) && limit > 0) {
+                                uploadLimits.value[key] = Math.min(UPLOAD_LIMITS[key], limit);
+                            }
+                        }
+                    }
+                    protocolReady.value = true;
+                    return;
+                }
+                if (data.type === "transfer-error") {
+                    transferFailed.value = true;
+                    concluded.value = false;
+                    showDialog.value = false;
+                    uploadError.value = typeof data.message === "string" ? data.message : "Falha no envio. Reinicie o processo junto ao totem.";
+                    if (reconnectTimer.value) window.clearTimeout(reconnectTimer.value);
+                    ws.close();
+                    return;
+                }
                 if (data.type === "session-locked") {
 
                     showDialogSessionLocked.value = true;
@@ -403,6 +435,7 @@ function connectWebSocket() {
             console.warn("WS closed");
             wsRef.value = null;
             wsState.value = WsState.closed;
+            protocolReady.value = false;
             if (concluded.value && event.wasClean) {
                 // Aguarda o fechamento do socket para não interromper dados ainda na fila.
                 try {
@@ -430,7 +463,7 @@ function connectWebSocket() {
 }
 
 function scheduleReconnect() {
-    if (concluded.value) return; // não reconectar se já concluído
+    if (concluded.value || transferFailed.value) return;
     if (reconnectTimer.value) return;
     reconnectTimer.value = window.setTimeout(() => {
         reconnectTimer.value = null;
@@ -457,12 +490,13 @@ async function sendSingleFile(
     toSession: string,
     onProgress?: (p: number) => void
 ) {
-    if (!wsRef.value || wsState.value !== WsState.open) {
+    if (transferFailed.value || !wsRef.value || wsState.value !== WsState.open) {
         throw new Error("WebSocket não conectado");
     }
 
     // 1. Lê o arquivo inteiro como ArrayBuffer
     const buffer = await file.arrayBuffer();
+    if (transferFailed.value) throw new Error("Envio interrompido pelo totem.");
 
     // 2. Converte buffer inteiro → base64
     const base64Full = arrayBufferToBase64(buffer);
@@ -470,6 +504,7 @@ async function sendSingleFile(
     // 3. Envia metadados
     const meta = {
         type: "file-meta",
+        protocolVersion: protocolVersion.value || undefined,
         toSession,
         fileName: file.name,
         size: file.size,
@@ -479,11 +514,12 @@ async function sendSingleFile(
     wsRef.value.send(JSON.stringify(meta));
 
     // 4. Fatiar a string base64 em pedaços seguros
-    const CHUNK = 64 * 1024; // 64KB (string, não bytes)
+    const CHUNK = uploadLimits.value.maxChunkChars;
     let seq = 0;
     let sentChars = 0;
 
     for (let offset = 0; offset < base64Full.length; offset += CHUNK) {
+        if (transferFailed.value) throw new Error("Envio interrompido pelo totem.");
         const chunk = base64Full.slice(offset, offset + CHUNK);
 
         const chunkMsg = {
@@ -530,6 +566,7 @@ async function sendSingleFile(
     }
 
     // 6. Envia finalização
+    if (transferFailed.value) throw new Error("Envio interrompido pelo totem.");
     const completeMsg = {
         type: "file-complete",
         toSession,
@@ -540,12 +577,15 @@ async function sendSingleFile(
 
 // UI action: send all selected files
 async function sendFiles() {
-    if (!files.value?.length || isSending.value || concluded.value) return;
+    if (!files.value?.length || isSending.value || concluded.value || transferFailed.value || !protocolReady.value) return;
     if (!wsRef.value || wsState.value !== WsState.open) {
         console.log(wsState.value)
         alert("WebSocket não conectado ao bridge. Tente novamente.");
         return;
     }
+
+    uploadError.value = validateSelection(files.value, uploadLimits.value);
+    if (uploadError.value) return;
 
     isSending.value = true;
     let hasErrors = false;
@@ -563,6 +603,7 @@ async function sendFiles() {
 
     // Iterate sequentially (or parallelize if you want)
     for (const fileItem of list) {
+        if (transferFailed.value) { hasErrors = true; break; }
         try {
             await sendSingleFile(fileItem.file, id.value, (p) => {
                 // update progress in the original files array (replace reactive content)
@@ -587,7 +628,10 @@ async function sendFiles() {
     }
 
     isSending.value = false;
-    if (hasErrors) return;
+    if (hasErrors || transferFailed.value) {
+        if (!uploadError.value) uploadError.value = "Algumas fotos não foram enviadas. Reinicie o processo junto ao totem.";
+        return;
+    }
 
     // After all done, optionally notify server to inform the machine
     try {
@@ -616,7 +660,7 @@ const progressCache = reactive<Record<string, { progress: number; status: string
 
 // Helpers for template binding
 const canSend = computed(() => files.value.length > 0 && wsState.value === WsState.open
-    && !isSending.value && !concluded.value);
+    && protocolReady.value && !isSending.value && !concluded.value && !transferFailed.value);
 const fileInputRef = ref<any>(null);
 
 function openFileSelector() {
