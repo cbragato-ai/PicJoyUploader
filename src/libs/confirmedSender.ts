@@ -37,7 +37,7 @@ export class ConfirmedSender {
           // Um ACK pode ser síncrono em transportes de teste.
           if (this.pending !== pending) return;
           pending.timer = setTimeout(() => {
-            if (attempts < (payload.operation === "finish" ? 1 : 5)) transmit();
+            if (attempts < (payload.operation === "finish" ? 1 : Math.ceil(FLOW_LIMITS.requestTimeoutMs / 15_000) + 2)) transmit();
             else this.abort("O totem não confirmou o envio no prazo. Reinicie junto ao totem.");
           }, payload.operation === "finish" ? FLOW_LIMITS.completionTimeoutMs + 10_000 : 15_000);
         } catch { this.abort(); }
