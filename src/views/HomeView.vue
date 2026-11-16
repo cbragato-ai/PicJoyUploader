@@ -22,7 +22,7 @@
                 </div>
                 <v-alert v-if="awaitingPreparation" type="info" class="my-3">Fotos recebidas. Aguarde enquanto o totem prepara o lote.</v-alert>
                 <div v-if="fileList.length" class="mt-4">
-                    <div v-for="f in fileList" :key="f.id" class="mb-3">
+                    <div v-for="f in fileList" :id="`upload-file-${f.id}`" :key="f.id" class="mb-3">
                         <div class="d-flex justify-space-between">
                             <div><strong>{{ f.name }}</strong> <small>({{ humanFileSize(f.size) }})</small></div>
                             <div v-if="f.status === FileStatus.done">✅ Recebida</div>
@@ -498,11 +498,15 @@ async function sendFiles() {
     uploadError.value = validateSelection(files.value, uploadLimits.value, true);
     if (uploadError.value) return;
     isSending.value = true;
+    window.scrollTo({ top: 0, behavior: "smooth" });
     const list = fileList.value;
     activeSender = new ConfirmedSender(wsRef.value, uuid);
     try {
         await activeSender.send(files.value, (index, progress, done) => {
             progressCache[list[index]!.id] = { progress, status: done ? "done" : "sending" };
+            if (done) {
+                document.getElementById(`upload-file-${list[index]!.id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
         });
         if (transferFailed.value) throw new Error("Envio interrompido.");
         concluded.value = true;
