@@ -500,12 +500,15 @@ async function sendFiles() {
     isSending.value = true;
     window.scrollTo({ top: 0, behavior: "smooth" });
     const list = fileList.value;
+    let visibleFileId = "";
     activeSender = new ConfirmedSender(wsRef.value, uuid);
     try {
         await activeSender.send(files.value, (index, progress, done) => {
             progressCache[list[index]!.id] = { progress, status: done ? "done" : "sending" };
-            if (done) {
-                document.getElementById(`upload-file-${list[index]!.id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            const activeFileId = list[index]!.id;
+            if (activeFileId !== visibleFileId) {
+                visibleFileId = activeFileId;
+                document.getElementById(`upload-file-${activeFileId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
             }
         });
         if (transferFailed.value) throw new Error("Envio interrompido.");
