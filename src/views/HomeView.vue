@@ -11,7 +11,7 @@
                 <p v-if="protocolReady">Este totem permite enviar até {{ uploadLimits.maxFiles }} foto(s), conforme o saldo disponível para impressão.</p>
                 <p v-else>Consultando a disponibilidade do totem...</p>
                 <v-alert v-if="uploadError" type="error" class="my-3">{{ uploadError }}</v-alert>
-                <div class="d-flex justify-center mb-4">
+                <div class="d-flex flex-wrap align-center justify-center ga-3 mb-4">
                     <v-file-input ref="fileInputRef" v-model="files" multiple accept="image/*" class="file-input-hidden"
                         :show-size="false" :hide-details="true" />
 
@@ -19,6 +19,11 @@
                         class="rounded-pill bg-success text-white" @click="openFileSelector">
                         Selecionar fotos
                     </v-btn>
+                    <v-btn :disabled="!canSend" class="rounded-pill bg-success text-white" size="large"
+                        @click="sendFiles">Enviar</v-btn>
+                    <v-chip v-if="isSending || transferElapsedMs > 0" color="pink-darken-1" variant="tonal" size="large">
+                        Tempo de transferência: {{ formattedTransferTime }}
+                    </v-chip>
                 </div>
                 <v-alert v-if="awaitingPreparation" type="info" class="my-3">Fotos recebidas. Aguarde enquanto o totem prepara o lote.</v-alert>
                 <div v-if="fileList.length" class="mt-4">
@@ -35,11 +40,6 @@
                 </div>
             </v-card-text>
 
-            <v-card-actions>
-                <v-spacer />
-                <v-btn :disabled="!canSend" class="rounded rounded-pill bg-success text-white"
-                    @click="sendFiles">Enviar</v-btn>
-            </v-card-actions>
         </v-card>
 
         <v-footer app class="bg-red-lighten-1">
@@ -132,6 +132,7 @@ import { UPLOAD_LIMITS, validateSelection } from "../libs/uploadLimits";
 import { CONFIRMED_PROTOCOL } from "../libs/confirmedProtocol";
 import { ConfirmedSender } from "../libs/confirmedSender";
 let activeSender: ConfirmedSender | undefined;
+let transferElapsedTimer: number | null = null;
 
 enum FileStatus { "idle", "sending", "done", "error" }
 const myID = uuid();
@@ -162,6 +163,14 @@ const showDialogSessionError = ref(false);
 const showTimeoutDialog = ref(false);
 const concluded = ref(false);
 const isSending = ref(false);
+const transferElapsedMs = ref(0);
+const formattedTransferTime = computed(() => {
+    const totalSeconds = Math.floor(transferElapsedMs.value / 1000);
+    const hours = Math.floor(totalSeconds / 3600).toString().padStart(2, "0");
+    const minutes = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, "0");
+    const seconds = (totalSeconds % 60).toString().padStart(2, "0");
+    return `${hours}:${minutes}:${seconds}`;
+});
 const uploadError = ref("");
 const transferFailed = ref(false);
 const protocolReady = ref(false);
@@ -289,6 +298,7 @@ function sendUserData() {
 
 onUnmounted(() => {
     activeSender?.abort();
+    if (transferElapsedTimer !== null) window.clearInterval(transferElapsedTimer);
     if (wsRef.value) {
         (wsRef.value as WebSocket).close();
         wsRef.value = null;
@@ -498,6 +508,11 @@ async function sendFiles() {
     uploadError.value = validateSelection(files.value, uploadLimits.value, true);
     if (uploadError.value) return;
     isSending.value = true;
+    const transferStartedAt = Date.now();
+    transferElapsedMs.value = 0;
+    transferElapsedTimer = window.setInterval(() => {
+        transferElapsedMs.value = Date.now() - transferStartedAt;
+    }, 1000);
     window.scrollTo({ top: 0, behavior: "smooth" });
     const list = fileList.value;
     let visibleFileId = "";
@@ -524,7 +539,13 @@ async function sendFiles() {
             if (progressCache[item.id]?.status !== "done") progressCache[item.id] = { progress: 0, status: "error" };
         }
         wsRef.value?.close();
-    } finally { isSending.value = false; activeSender = undefined; }
+    } finally {
+        transferElapsedMs.value = Date.now() - transferStartedAt;
+        if (transferElapsedTimer !== null) window.clearInterval(transferElapsedTimer);
+        transferElapsedTimer = null;
+        isSending.value = false;
+        activeSender = undefined;
+    }
 }
 
 // Progress cache used by template via fileListProgress helper
