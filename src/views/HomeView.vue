@@ -181,7 +181,7 @@ enum WsState { "closed", "connecting", "open" }
 const wsRef = ref(null as WebSocket | null);
 const wsState = ref(WsState.closed as WsState);
 const reconnectTimer = ref(null as number | null);
-const remoteStatus = ref(null);
+const remoteStatus = ref("verificando");
 
 // Configs
 //const CHUNK_SIZE = 64 * 1024; // 64KB
