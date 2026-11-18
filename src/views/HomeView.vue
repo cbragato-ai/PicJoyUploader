@@ -456,7 +456,7 @@ function connectWebSocket() {
         });
 
         ws.addEventListener("close", (event: CloseEvent) => {
-            console.warn("WS closed");
+            console.warn("WS closed", { code: event.code, reason: event.reason, wasClean: event.wasClean });
             activeSender?.abort();
             if (isSending.value && !concluded.value) {
                 transferFailed.value = true; uploadError.value ||= "A conexão foi interrompida. Reinicie junto ao totem.";
@@ -464,6 +464,7 @@ function connectWebSocket() {
             wsRef.value = null;
             wsState.value = WsState.closed;
             protocolReady.value = false;
+            remoteStatus.value = "verificando";
             if (concluded.value && event.wasClean) {
                 // Aguarda o fechamento do socket para não interromper dados ainda na fila.
                 try {
