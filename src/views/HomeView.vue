@@ -87,7 +87,8 @@
                 <v-card-text>
                     <p class="text-justify">Suas fotos foram recebidas e preparadas pelo kiosk. Customize e imprima
                         suas fotos a partir de lá.</p>
-                    <p class="text-justify">Para novas fotos reinicie o processo lendo o QRCode novamente.</p>
+                    <p class="text-justify"><strong>Se esta página continuar aberta, feche esta aba do navegador.</strong>
+                        Para enviar mais fotos, volte ao totem, aguarde um novo QR Code na tela e leia-o novamente.</p>
                 </v-card-text>
             </v-card>
         </v-dialog>
@@ -95,8 +96,9 @@
             <v-card class="bg-light-red-lighten-4 rounded-xl" width="90vwd">
                 <v-card-title class="text-center">Ops! Não foi possivel prosseguir!</v-card-title>
                 <v-card-text>
-                    <p class="text-justify">O totem está sendo usado por outro usuário no momento.</p>
-                    <p class="text-justify">Aguarde até que o mesmo esteja liberado.</p>
+                    <p class="text-justify">O totem está sendo usado por outra pessoa no momento.</p>
+                    <p class="text-justify"><strong>Feche esta aba.</strong> Quando o totem estiver disponível e exibir um novo QR Code,
+                        leia-o para iniciar.</p>
                 </v-card-text>
             </v-card>
         </v-dialog>
@@ -104,8 +106,9 @@
             <v-card class="bg-light-red-lighten-4 rounded-xl" width="90vwd">
                 <v-card-title class="text-center">Ops! Não foi possivel prosseguir!</v-card-title>
                 <v-card-text>
-                    <p class="text-justify">Aconteceu algum problema com o totem.</p>
-                    <p class="text-justify">O mesmo não está disponível no momento.</p>
+                    <p class="text-justify">Esta autorização não está mais disponível. Ela pode ter expirado ou já ter sido usada.</p>
+                    <p class="text-justify"><strong>Feche esta aba do navegador.</strong> Volte ao totem e leia novamente o QR Code
+                        exibido na tela. Se não houver um QR Code, aguarde o totem voltar à tela inicial.</p>
                 </v-card-text>
             </v-card>
         </v-dialog>
@@ -113,9 +116,8 @@
             <v-card class="bg-light-green-lighten-4 rounded-xl" width="90vwd">
                 <v-card-title class="text-center">O tempo de conexão expirou!</v-card-title>
                 <v-card-text>
-                    <p class="text-justify">Reinicie o processo lendo o QRCode novamente.</p>
-                    <p class="text-justify">Fique atento à tela do kiosk, caso deseje mais tempo, toque em +1 minuto.
-                    </p>
+                    <p class="text-justify"><strong>Feche esta aba do navegador e leia novamente o QR Code exibido no totem.</strong></p>
+                    <p class="text-justify">Para continuar na próxima vez, acompanhe a tela do totem e toque em +1 minuto quando solicitado.</p>
                 </v-card-text>
             </v-card>
         </v-dialog>
@@ -182,6 +184,14 @@ const wsRef = ref(null as WebSocket | null);
 const wsState = ref(WsState.closed as WsState);
 const reconnectTimer = ref(null as number | null);
 const remoteStatus = ref("verificando");
+
+function withQrRestartGuidance(message: string) {
+    const detail = message.trim();
+    const closeInstruction = /QR\s*Code/i.test(detail)
+        ? " Feche esta aba do navegador antes de ler o QR Code do totem novamente."
+        : " Feche esta aba do navegador e leia novamente o QR Code exibido no totem.";
+    return `${detail}${closeInstruction}`;
+}
 
 // Configs
 //const CHUNK_SIZE = 64 * 1024; // 64KB
@@ -270,7 +280,7 @@ async function connectSession() {
         }).catch(() => {
             userDialogShow.value = false;
             showDialogSessionError.value = true;
-            uploadError.value = "Releia o QR Code atual junto ao totem. A permissão pode ter expirado ou já ter sido utilizada.";
+            uploadError.value = "Feche esta aba do navegador e leia novamente o QR Code exibido no totem. A autorização anterior pode ter expirado ou já ter sido usada.";
         });
 }
 
@@ -419,7 +429,7 @@ function connectWebSocket() {
                     transferFailed.value = true;
                     concluded.value = false;
                     showDialog.value = false;
-                    uploadError.value = typeof data.message === "string" ? data.message : "Falha no envio. Reinicie o processo junto ao totem.";
+                    uploadError.value = withQrRestartGuidance(typeof data.message === "string" ? data.message : "Falha no envio.");
                     if (reconnectTimer.value) window.clearTimeout(reconnectTimer.value);
                     ws.close();
                     return;
@@ -459,7 +469,7 @@ function connectWebSocket() {
             console.warn("WS closed", { code: event.code, reason: event.reason, wasClean: event.wasClean });
             activeSender?.abort();
             if (isSending.value && !concluded.value) {
-                transferFailed.value = true; uploadError.value ||= "A conexão foi interrompida. Reinicie junto ao totem.";
+                transferFailed.value = true; uploadError.value ||= withQrRestartGuidance("A conexão foi interrompida.");
             }
             wsRef.value = null;
             wsState.value = WsState.closed;
@@ -478,7 +488,7 @@ function connectWebSocket() {
             // Antes do início do envio, reconectamos com a mesma autorização sem
             // invalidar a seleção já feita pelo usuário.
             if (isSending.value && protocolVersion.value === CONFIRMED_PROTOCOL && !concluded.value) {
-                transferFailed.value = true; uploadError.value ||= "Conexão encerrada. Releia o QR Code junto ao totem.";
+                transferFailed.value = true; uploadError.value ||= withQrRestartGuidance("A conexão foi encerrada.");
             }
             scheduleReconnect();
         });
@@ -537,7 +547,7 @@ async function sendFiles() {
         wsRef.value?.close();
     } catch (error) {
         transferFailed.value = true;
-        uploadError.value ||= error instanceof Error ? error.message : "Falha no envio. Reinicie junto ao totem.";
+        uploadError.value ||= withQrRestartGuidance(error instanceof Error ? error.message : "Falha no envio.");
         showDialog.value = false;
         for (const item of list) {
             if (progressCache[item.id]?.status !== "done") progressCache[item.id] = { progress: 0, status: "error" };
