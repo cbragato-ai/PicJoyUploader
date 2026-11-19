@@ -474,7 +474,10 @@ function connectWebSocket() {
                     if (!window.closed) window.location.replace("https://picjoyclub.com");
                 }
             }
-            if (protocolVersion.value === CONFIRMED_PROTOCOL && !concluded.value) {
+            // A escolha de arquivos pode suspender o navegador e derrubar o socket.
+            // Antes do início do envio, reconectamos com a mesma autorização sem
+            // invalidar a seleção já feita pelo usuário.
+            if (isSending.value && protocolVersion.value === CONFIRMED_PROTOCOL && !concluded.value) {
                 transferFailed.value = true; uploadError.value ||= "Conexão encerrada. Releia o QR Code junto ao totem.";
             }
             scheduleReconnect();
