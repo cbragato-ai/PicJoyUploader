@@ -134,6 +134,7 @@ import { UPLOAD_LIMITS, validateSelection } from "../libs/uploadLimits";
 import { CONFIRMED_PROTOCOL } from "../libs/confirmedProtocol";
 import { ConfirmedSender } from "../libs/confirmedSender";
 let activeSender: ConfirmedSender | undefined;
+const negotiatedFlow = ref<{ transferWindowBytes?: number; maxInFlightRequests?: number }>({});
 let transferElapsedTimer: number | null = null;
 
 enum FileStatus { "idle", "sending", "done", "error" }
@@ -408,6 +409,7 @@ function connectWebSocket() {
                 const data = JSON.parse(text);
                 if (data.type === "registered") {
                     protocolVersion.value = data.protocolVersion === CONFIRMED_PROTOCOL ? CONFIRMED_PROTOCOL : 0;
+                    negotiatedFlow.value = data.flowLimits ?? {};
                     if (!protocolVersion.value) uploadError.value = "O totem precisa ser atualizado para confirmar o recebimento das fotos.";
                     if (protocolVersion.value && data.uploadLimits) {
                         for (const key of Object.keys(UPLOAD_LIMITS) as (keyof typeof UPLOAD_LIMITS)[]) {
@@ -530,7 +532,7 @@ async function sendFiles() {
     window.scrollTo({ top: 0, behavior: "smooth" });
     const list = fileList.value;
     let visibleFileId = "";
-    activeSender = new ConfirmedSender(wsRef.value, uuid);
+    activeSender = new ConfirmedSender(wsRef.value, uuid, negotiatedFlow.value);
     try {
         await activeSender.send(files.value, (index, progress, done) => {
             progressCache[list[index]!.id] = { progress, status: done ? "done" : "sending" };

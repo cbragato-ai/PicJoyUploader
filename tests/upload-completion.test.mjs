@@ -59,6 +59,7 @@ function setup({ canClose = false, closeThrows = false, failNotify = false, lega
     }
     const browser = {
         closed: false,
+        scrollTo() {},
         close() {
             events.push("window-close");
             if (closeThrows) throw new Error("Fechamento bloqueado");
@@ -70,6 +71,8 @@ function setup({ canClose = false, closeThrows = false, failNotify = false, lega
         },
         setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length; },
         clearTimeout() {},
+        setInterval() { return 1; },
+        clearInterval() {},
     };
     const vue = {
         ref: value => ({ value }),
@@ -92,6 +95,7 @@ function setup({ canClose = false, closeThrows = false, failNotify = false, lega
         },
         WebSocket: FakeWebSocket,
         window: browser,
+        document: { getElementById() { return { scrollIntoView() {} }; } },
         console: { log() {}, info() {}, debug() {}, warn() {}, error() {} },
         Uint8Array, ArrayBuffer, TextDecoder, btoa, setTimeout, clearTimeout,
         alert() { events.push("alert"); },
@@ -99,7 +103,8 @@ function setup({ canClose = false, closeThrows = false, failNotify = false, lega
     exports.connectWebSocket();
     socket.emit("open");
     if (registered) socket.emit("message", { data: JSON.stringify({ type: "registered", role: "web",
-        ...(legacy ? {} : { protocolVersion: 2, uploadLimits: { ...limitsModule.exports.UPLOAD_LIMITS, maxFiles: capacity },
+        ...(legacy ? {} : { protocolVersion: 2, flowLimits: { transferWindowBytes: 640 * 1024, maxInFlightRequests: 8 },
+            uploadLimits: { ...limitsModule.exports.UPLOAD_LIMITS, maxFiles: capacity },
             ...(capacityKnown ? { printCapacity: { maxFiles: capacity } } : {}) }),
     }) });
     exports.files.value = [{
@@ -184,11 +189,12 @@ test("fechamento anormal após confirmar o lote não fecha a aba nem reconecta",
     assert.equal(timers.length, 0);
 });
 
-test("desconexão após permissão não reconecta com uma permissão consumida", () => {
+test("desconexão antes do envio agenda reconexão enquanto a seleção permanece", () => {
     const { socket, events, timers } = setup();
     socket.emit("close", { wasClean: false });
     assert.equal(events.includes("window-close"), false);
-    assert.equal(timers.length, 0);
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 3000);
 });
 
 test("aguarda registro v2 e exige confirmação em vez de sucesso com Bridge legado", async () => {
@@ -231,7 +237,7 @@ test("erro do Bridge interrompe o envio em curso sem sucesso, redirecionamento o
     release(new Uint8Array([1, 2, 3]).buffer);
     await pending;
     socket.emit("close", { wasClean: true });
-    assert.equal(app.uploadError.value, "Limite atingido.");
+    assert.match(app.uploadError.value, /^Limite atingido\. Feche esta aba do navegador e leia novamente o QR Code exibido no totem\.$/);
     assert.equal(app.concluded.value, false);
     assert.equal(app.canSend.value, false);
     assert.equal(events.includes("transfer_complete"), false);
@@ -247,7 +253,7 @@ test("rejeição após enfileirar o lote retira o diálogo de sucesso e mantém 
     socket.emit("close", { wasClean: true });
     assert.equal(app.showDialog.value, false);
     assert.equal(app.concluded.value, false);
-    assert.equal(app.uploadError.value, "Arquivo incompleto.");
+    assert.match(app.uploadError.value, /^Arquivo incompleto\. Feche esta aba do navegador e leia novamente o QR Code exibido no totem\.$/);
     assert.equal(events.includes("window-close"), false);
 });
 
