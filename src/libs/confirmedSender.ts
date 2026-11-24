@@ -58,15 +58,19 @@ export class ConfirmedSender {
       transmit();
     });
   }
-  async send(files: readonly File[], progress: (index: number, value: number, done: boolean) => void) {
+  async send(files: readonly File[], progress: (index: number, value: number, done: boolean, acknowledgedBytes: number) => void,
+    onDataTransferStart: () => void = () => undefined,
+    onDataTransferComplete: () => void = () => undefined) {
     const manifest: ManifestFile[] = files.map(file => ({ fileId: this.makeId(), name: file.name,
       size: file.size, mime: file.type || "image/jpeg" }));
     try {
       await this.request({ operation: "start", files: manifest });
+      onDataTransferStart();
+      let acknowledgedBeforeFile = 0;
       for (let index = 0; index < files.length; index++) {
         const file = files[index]!, fileId = manifest[index]!.fileId;
         const inFlight: Array<{ promise: Promise<void>; size: number }> = [];
-        let offset = 0, seq = 0, acknowledged = 0;
+        let offset = 0, seq = 0, acknowledged = 0, totalAcknowledged = 0;
         while (offset < file.size || inFlight.length) {
           while (offset < file.size && inFlight.length < this.maxInFlightRequests &&
             inFlight.reduce((sum, item) => sum + item.size, 0) < this.transferWindowBytes) {
@@ -85,11 +89,16 @@ export class ConfirmedSender {
             const completed = inFlight.shift()!;
             await completed.promise;
             acknowledged = Math.min(file.size, acknowledged + FLOW_LIMITS.chunkBytes);
-            progress(index, Math.min(99, Math.floor(acknowledged / file.size * 100)), false);
+            totalAcknowledged += Math.min(FLOW_LIMITS.chunkBytes, file.size - totalAcknowledged);
+            progress(index, Math.min(99, Math.floor(acknowledged / file.size * 100)), false,
+              acknowledgedBeforeFile + totalAcknowledged);
           }
         }
-        await this.request({ operation: "file-complete", fileId }); progress(index, 100, true);
+        await this.request({ operation: "file-complete", fileId });
+        acknowledgedBeforeFile += file.size;
+        progress(index, 100, true, acknowledgedBeforeFile);
       }
+      onDataTransferComplete();
       await this.request({ operation: "finish" });
     } catch (error) { this.abort(); throw error; }
   }

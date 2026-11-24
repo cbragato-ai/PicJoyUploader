@@ -24,6 +24,9 @@
                     <v-chip v-if="showTransferTimer && (isSending || transferElapsedMs > 0)" color="pink-darken-1" variant="tonal" size="large">
                         Tempo de transferência: {{ formattedTransferTime }}
                     </v-chip>
+                    <v-chip v-if="showTransferTimer && (isSending || transferElapsedMs > 0)" color="pink-darken-1" variant="tonal" size="large">
+                        Velocidade média: {{ formattedTransferSpeed }}
+                    </v-chip>
                 </div>
                 <v-alert v-if="awaitingPreparation" type="info" class="my-3">Fotos recebidas. Aguarde enquanto o totem prepara o lote.</v-alert>
                 <div v-if="fileList.length" class="mt-4">
@@ -137,6 +140,7 @@ let activeSender: ConfirmedSender | undefined;
 const negotiatedFlow = ref<{ transferWindowBytes?: number; maxInFlightRequests?: number }>({});
 const showTransferTimer = ref(false);
 let transferElapsedTimer: number | null = null;
+let transferDataStartedAt: number | null = null;
 
 enum FileStatus { "idle", "sending", "done", "error" }
 const myID = uuid();
@@ -168,6 +172,16 @@ const showTimeoutDialog = ref(false);
 const concluded = ref(false);
 const isSending = ref(false);
 const transferElapsedMs = ref(0);
+const transferDataElapsedMs = ref(0);
+const acknowledgedBytes = ref(0);
+const formattedTransferSpeed = computed(() => formatTransferSpeed(acknowledgedBytes.value, transferDataElapsedMs.value));
+function formatTransferSpeed(bytes: number, elapsedMs: number) {
+    if (elapsedMs <= 0 || bytes <= 0) return "0 KB/s";
+    const bytesPerSecond = bytes * 1000 / elapsedMs;
+    return bytesPerSecond >= 1_000_000
+        ? `${(bytesPerSecond / 1_000_000).toFixed(2)} MB/s`
+        : `${(bytesPerSecond / 1_000).toFixed(2)} KB/s`;
+}
 const formattedTransferTime = computed(() => {
     const totalSeconds = Math.floor(transferElapsedMs.value / 1000);
     const hours = Math.floor(totalSeconds / 3600).toString().padStart(2, "0");
@@ -527,22 +541,32 @@ async function sendFiles() {
     if (uploadError.value) return;
     isSending.value = true;
     const transferStartedAt = Date.now();
+    transferDataStartedAt = transferStartedAt;
     transferElapsedMs.value = 0;
+    transferDataElapsedMs.value = 0;
+    acknowledgedBytes.value = 0;
     transferElapsedTimer = window.setInterval(() => {
         transferElapsedMs.value = Date.now() - transferStartedAt;
+        if (transferDataStartedAt !== null) transferDataElapsedMs.value = Date.now() - transferDataStartedAt;
     }, 1000);
     window.scrollTo({ top: 0, behavior: "smooth" });
     const list = fileList.value;
     let visibleFileId = "";
     activeSender = new ConfirmedSender(wsRef.value, uuid, negotiatedFlow.value);
     try {
-        await activeSender.send(files.value, (index, progress, done) => {
+        await activeSender.send(files.value, (index, progress, done, bytes) => {
+            acknowledgedBytes.value = bytes;
             progressCache[list[index]!.id] = { progress, status: done ? "done" : "sending" };
             const activeFileId = list[index]!.id;
             if (activeFileId !== visibleFileId) {
                 visibleFileId = activeFileId;
                 document.getElementById(`upload-file-${activeFileId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
             }
+        }, () => {
+            transferDataStartedAt = Date.now();
+        }, () => {
+            if (transferDataStartedAt !== null) transferDataElapsedMs.value = Date.now() - transferDataStartedAt;
+            transferDataStartedAt = null;
         });
         if (transferFailed.value) throw new Error("Envio interrompido.");
         concluded.value = true;
@@ -559,6 +583,8 @@ async function sendFiles() {
         wsRef.value?.close();
     } finally {
         transferElapsedMs.value = Date.now() - transferStartedAt;
+        if (transferDataStartedAt !== null) transferDataElapsedMs.value = Date.now() - transferDataStartedAt;
+        transferDataStartedAt = null;
         if (transferElapsedTimer !== null) window.clearInterval(transferElapsedTimer);
         transferElapsedTimer = null;
         isSending.value = false;
