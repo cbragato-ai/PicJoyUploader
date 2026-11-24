@@ -21,7 +21,7 @@
                     </v-btn>
                     <v-btn :disabled="!canSend" class="rounded-pill bg-success text-white" size="large"
                         @click="sendFiles">Enviar</v-btn>
-                    <v-chip v-if="isSending || transferElapsedMs > 0" color="pink-darken-1" variant="tonal" size="large">
+                    <v-chip v-if="showTransferTimer && (isSending || transferElapsedMs > 0)" color="pink-darken-1" variant="tonal" size="large">
                         Tempo de transferência: {{ formattedTransferTime }}
                     </v-chip>
                 </div>
@@ -135,6 +135,7 @@ import { CONFIRMED_PROTOCOL } from "../libs/confirmedProtocol";
 import { ConfirmedSender } from "../libs/confirmedSender";
 let activeSender: ConfirmedSender | undefined;
 const negotiatedFlow = ref<{ transferWindowBytes?: number; maxInFlightRequests?: number }>({});
+const showTransferTimer = ref(false);
 let transferElapsedTimer: number | null = null;
 
 enum FileStatus { "idle", "sending", "done", "error" }
@@ -410,6 +411,7 @@ function connectWebSocket() {
                 if (data.type === "registered") {
                     protocolVersion.value = data.protocolVersion === CONFIRMED_PROTOCOL ? CONFIRMED_PROTOCOL : 0;
                     negotiatedFlow.value = data.flowLimits ?? {};
+                    showTransferTimer.value = data.showTransferTimer === true;
                     if (!protocolVersion.value) uploadError.value = "O totem precisa ser atualizado para confirmar o recebimento das fotos.";
                     if (protocolVersion.value && data.uploadLimits) {
                         for (const key of Object.keys(UPLOAD_LIMITS) as (keyof typeof UPLOAD_LIMITS)[]) {
